@@ -1,5 +1,5 @@
 const express = require("express");
-const { createEvent,getAllEvents,getEventById,updateEvent,deleteEvent } = require("../controllers/eventController");
+const { createEvent,getAllEvents,getEventById,updateEvent,deleteEvent,getMyEvents } = require("../controllers/eventController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { check } = require("express-validator");
 const roleMiddleware = require("../middleware/roleMiddleware");
@@ -15,6 +15,8 @@ router.post(
     createEvent
 );
 
+router.get( "/my-events", authMiddleware, roleMiddleware(["organizer"]), getMyEvents );
+
 
 router.get(
     "/getevent",
@@ -23,15 +25,8 @@ router.get(
     getAllEvents
 );
 
-router.get(
-    "/:id",
-    [
-        check("id")
-        .isMongoId()
-        .withMessage("Invalid event ID"),
-    ],
-    getEventById
-    );
+// Get a single event by ID
+ router.get( "/:id", [ check("id") .isMongoId() .withMessage("Invalid event ID"), ], getEventById );
 
 
 router.put("/:id",authMiddleware,  roleMiddleware(["organizer"]),

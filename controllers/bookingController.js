@@ -124,27 +124,32 @@ const createBooking = async (req, res) => {
 };
 
 //getMYbookings
-
-const getMybookings =async(req,res)=>{
-  try{
-    const bookings =await Booking.find({
-      user:req.user.user_id
-    })
-    .populate("event","eventName date time venue location ticketPrice")
-    .populate("user", "firstName lastName email")
+const getMybookings = async (req, res) => {
+  try {
+    const bookings = await Booking.find({
+    user: req.user.user_id,
+    status: { $ne: "cancelled" }
+  })
+  .populate(
+    "event",
+    "eventName date time venue location ticketPrice image"
+  )
+  .populate("user", "firstName lastName email");
 
     return res.status(200).json({
-      status:true,
-      message:"Booking fetched successfully",
-      data:bookings
+      status: true,
+      message: "Bookings fetched successfully",
+      data: bookings
     });
 
-  }catch(error){
+  } catch (error) {
     return res.status(500).json({
-      message:error.message ||"failed to fetch bookings"
+      message: error.message || "Failed to fetch bookings"
     });
   }
 };
+
+
 
 //getAllbookings
 const getAllbookings = async(req,res)=>{
@@ -267,6 +272,101 @@ const cancelBooking = async(req,res)=>{
 }
 }
 
+// Get one booking by ID for viewing a ticket
+const getBookingById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Find the booking belonging to the logged-in user
+    const booking = await Booking.findOne({
+      _id: id,
+      user: req.user.user_id
+    })
+      .populate(
+        "event",
+        "eventName date time venue location ticketPrice image"
+      )
+      .populate("user", "firstName lastName email");
+
+    if (!booking) {
+      return res.status(404).json({
+        status: false,
+        message: "Booking not found"
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: "Booking fetched successfully",
+      data: booking
+    });
+
+  } catch (error) {
+    console.error("GET BOOKING BY ID ERROR:", error);
+
+    return res.status(500).json({
+      status: false,
+      message: error.message || "Failed to fetch booking"
+    });
+  }
+};
+
+
+
+// Get booking details for an organizer
+const getOrganizerBookingById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Find the booking and populate event and customer details
+    const booking = await Booking.findById(id)
+      .populate(
+        "event",
+        "eventName date time venue location ticketPrice image organizer"
+      )
+      .populate("user", "firstName lastName email");
+
+    // Check whether the booking exists
+    if (!booking) {
+      return res.status(404).json({
+        status: false,
+        message: "Booking not found",
+      });
+    }
+
+    // Check whether the event exists
+    if (!booking.event) {
+      return res.status(404).json({
+        status: false,
+        message: "Event not found",
+      });
+    }
+
+    // Allow access only if this organizer created the event
+    if (
+      booking.event.organizer.toString() !==
+      req.user.user_id.toString()
+    ) {
+      return res.status(403).json({
+        status: false,
+        message: "You are not authorized to view this booking",
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: "Booking details fetched successfully",
+      data: booking,
+    });
+  } catch (error) {
+    console.error("GET ORGANIZER BOOKING DETAILS ERROR:", error);
+
+    return res.status(500).json({
+      status: false,
+      message: error.message || "Failed to fetch booking details",
+    });
+  }
+};
 
 
 module.exports = {
@@ -274,6 +374,8 @@ module.exports = {
   getMybookings,
   getAllbookings,
   cancelBooking,
-  getOrganizerBookings
+  getOrganizerBookings,
+  getBookingById,
+  getOrganizerBookingById
 };
 

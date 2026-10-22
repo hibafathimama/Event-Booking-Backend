@@ -5,9 +5,10 @@ const { validationResult } = require("express-validator");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 
+
 const registerUser = async (req, res) => {
   try {
-    //validation
+    // Validation
     const errors = validationResult(req);
 
     if (!errors.isEmpty()) {
@@ -17,6 +18,12 @@ const registerUser = async (req, res) => {
     }
 
     const { firstName, lastName, email, password, role } = req.body;
+    
+    if (!req.file) {
+    return res.status(400).json({
+        message: "Profile image is required",
+    });
+    }
 
     // Check required fields
     if (!firstName || !lastName || !email || !password) {
@@ -37,6 +44,11 @@ const registerUser = async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Get the uploaded profile image path
+    const image = req.file
+      ? `/uploads/profiles/${req.file.filename}`
+      : "";
+
     // Create user
     const user = await User.create({
       firstName,
@@ -44,20 +56,22 @@ const registerUser = async (req, res) => {
       email,
       password: hashedPassword,
       role: role || "user",
+      image,
     });
 
-    //token
+    // Generate JWT token
     const token = jwt.sign(
-  {
-    user_id: user._id,
-    role: user.role,
-  },
-  process.env.JWT_SECRET,
-  {
-    expiresIn: process.env.JWT_TOKEN_EXPIRY || "1d",
-  }
-);
+      {
+        user_id: user._id,
+        role: user.role,
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: process.env.JWT_TOKEN_EXPIRY || "1d",
+      }
+    );
 
+    // Send response
     res.status(201).json({
       message: "User registered successfully",
       data: {
@@ -66,11 +80,12 @@ const registerUser = async (req, res) => {
         lastName: user.lastName,
         email: user.email,
         role: user.role,
+        image: user.image,
       },
       accessToken: token,
     });
   } catch (error) {
-    console.log(error);
+    console.log("REGISTER USER ERROR:", error);
 
     res.status(500).json({
       message: "Registration failed",
@@ -122,18 +137,39 @@ const loginUser=async(req,res)=>{
       });
     }
 
+            console.log(
+  "LOGIN SECRET:",
+  process.env.JWT_SECRET
+    ? "Loaded"
+    : "Missing"
+);
+const crypto = require("crypto");
+
+console.log(
+  "LOGIN SECRET FINGERPRINT:",
+  crypto
+    .createHash("sha256")
+    .update(process.env.JWT_SECRET || "")
+    .digest("hex")
+    .slice(0, 12)
+);
     //create JWT token
 
-    const token=jwt.sign(
-      {
-        user_id:user._id,
-        role:user.role,
-      },
-      process.env.JWT_SECRET,
-      {
-        expiresIn:process.env.JWT_TOKEN_EXPIRY || "1d",
-      }
-    );
+        const token = jwt.sign(
+        {
+            user_id: user._id,
+            role: user.role,
+        },
+        process.env.JWT_SECRET,
+        {
+            expiresIn: process.env.JWT_TOKEN_EXPIRY || "1d",
+        }
+        );
+        console.log("New JWT generated during login");
+        console.log(
+  "LOGIN TOKEN HASH:",
+  crypto.createHash("sha256").update(token).digest("hex").slice(0, 12)
+);
 
     //send response 
     return res.status(200).json({
@@ -187,96 +223,108 @@ const getMyProfile = async (req, res) => {
 };
 
 const updateMyProfile = async (req, res) => {
-    try {
-        const userId = req.user.user_id;
+try {
+const userId = req.user.user_id;
 
-        const { firstName, lastName, email } = req.body;
+    const { firstName, lastName, email } = req.body;
 
-        // Check whether at least one field is provided
-        if (
-            firstName === undefined &&
-            lastName === undefined &&
-            email === undefined
-        ) {
-            return res.status(400).json({
-                status: false,
-                message: "Please provide at least one field to update"
-            });
-        }
-
-        // Validate the provided fields
-        if (
-            (firstName !== undefined &&
-                (typeof firstName !== "string" || !firstName.trim())) ||
-            (lastName !== undefined &&
-                (typeof lastName !== "string" || !lastName.trim())) ||
-            (email !== undefined &&
-                (typeof email !== "string" ||
-                    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())))
-        ) {
-            return res.status(400).json({
-                status: false,
-                message: "Please provide valid profile details"
-            });
-        }
-
-        // Check whether another user already uses this email
-        if (email !== undefined) {
-            const existingUser = await User.findOne({
-                email: email.trim().toLowerCase(),
-                _id: { $ne: userId }
-            });
-
-            if (existingUser) {
-                return res.status(409).json({
-                    status: false,
-                    message: "Email is already registered"
-                });
-            }
-        }
-
-        const updates = {};
-
-        if (firstName !== undefined) {
-            updates.firstName = firstName.trim();
-        }
-
-        if (lastName !== undefined) {
-            updates.lastName = lastName.trim();
-        }
-
-        if (email !== undefined) {
-            updates.email = email.trim().toLowerCase();
-        }
-
-        const updatedUser = await User.findByIdAndUpdate(
-            userId,
-            { $set: updates },
-            { new: true, runValidators: true }
-        ).select("-password");
-
-        if (!updatedUser) {
-            return res.status(404).json({
-                status: false,
-                message: "User not found"
-            });
-        }
-
-        return res.status(200).json({
-            status: true,
-            message: "Profile updated successfully",
-            data: updatedUser
-        });
-
-    } catch (error) {
-        console.error("UPDATE MY PROFILE ERROR:", error);
-
-        return res.status(500).json({
+    // Check whether at least one field or image is provided
+    if (
+        firstName === undefined &&
+        lastName === undefined &&
+        email === undefined &&
+        !req.file
+    ) {
+        return res.status(400).json({
             status: false,
-            message: "Failed to update profile"
+            message: "Please provide at least one field to update"
         });
     }
+
+    // Validate the provided fields
+    if (
+        (firstName !== undefined &&
+            (typeof firstName !== "string" || !firstName.trim())) ||
+
+        (lastName !== undefined &&
+            (typeof lastName !== "string" || !lastName.trim())) ||
+
+        (email !== undefined &&
+            (typeof email !== "string" ||
+                !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())))
+    ) {
+        return res.status(400).json({
+            status: false,
+            message: "Please provide valid profile details"
+        });
+    }
+
+    // Check whether another user already uses this email
+    if (email !== undefined) {
+        const existingUser = await User.findOne({
+            email: email.trim().toLowerCase(),
+            _id: { $ne: userId }
+        });
+
+        if (existingUser) {
+            return res.status(409).json({
+                status: false,
+                message: "Email is already registered"
+            });
+        }
+    }
+
+    // Prepare the fields to update
+    const updates = {};
+
+    if (firstName !== undefined) {
+        updates.firstName = firstName.trim();
+    }
+
+    if (lastName !== undefined) {
+        updates.lastName = lastName.trim();
+    }
+
+    if (email !== undefined) {
+        updates.email = email.trim().toLowerCase();
+    }
+
+    // Update profile image if a new image is uploaded
+    if (req.file) {
+        updates.image = `/uploads/profiles/${req.file.filename}`;
+    }
+
+    // Update user in MongoDB
+    const updatedUser = await User.findByIdAndUpdate(
+        userId,
+        { $set: updates },
+        { new: true, runValidators: true }
+    ).select("-password");
+
+    if (!updatedUser) {
+        return res.status(404).json({
+            status: false,
+            message: "User not found"
+        });
+    }
+
+    return res.status(200).json({
+        status: true,
+        message: "Profile updated successfully",
+        data: updatedUser
+    });
+
+} catch (error) {
+    console.error("UPDATE MY PROFILE ERROR:", error);
+
+    return res.status(500).json({
+        status: false,
+        message: "Failed to update profile"
+    });
+}
+
 };
+
 
 // Change Password
 const changePassword = async (req, res) => {

@@ -13,9 +13,12 @@ const { check } = require("express-validator");
 
 const router = express.Router();
 const authMiddleware = require("../middleware/authMiddleware");
+const profileUpload = require("../middleware/profileUpload");
+
 
 router.post(
   "/register",
+  profileUpload.single("image"),
   [
     check("firstName")
       .notEmpty()
@@ -45,6 +48,7 @@ router.post(
   registerUser
 );
 
+
 router.post(
   "/login",
   [
@@ -68,9 +72,10 @@ router.get(
 );
 
 router.put(
-    "/my-profile",
-    authMiddleware,
-    updateMyProfile
+  "/my-profile",
+  authMiddleware,
+  profileUpload.single("image"),
+  updateMyProfile
 );
 
 router.put(

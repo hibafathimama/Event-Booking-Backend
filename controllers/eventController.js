@@ -13,7 +13,7 @@ const { validationResult } = require("express-validator");
         });
         }
 
-        const{
+      const {
         eventName,
         category,
         date,
@@ -22,8 +22,8 @@ const { validationResult } = require("express-validator");
         location,
         description,
         ticketPrice,
-        availableSeats,
-        }=req.body;
+        totalSeats,
+      } = req.body;
 
         const image = req.file ? `/uploads/${req.file.filename}` : null;
 
@@ -36,25 +36,26 @@ const { validationResult } = require("express-validator");
       !location ||
       !description ||
       ticketPrice === undefined ||
-      availableSeats === undefined
+      totalSeats === undefined
     ) {
       return res.status(400).json({
         message: "All fields are required",
       });
     }
-    const event= await Event.create({
-        eventName,
-        category,
-        date,
-        time,
-        venue,
-        location,
-        description,
-        ticketPrice,
-        availableSeats,
-        image, // Added image path
-        organizer: req.user.user_id,
-    })
+    const event = await Event.create({
+      eventName,
+      category,
+      date,
+      time,
+      venue,
+      location,
+      description,
+      ticketPrice: Number(ticketPrice),
+      totalSeats: Number(totalSeats),
+      availableSeats: Number(totalSeats),
+      image,
+      organizer: req.user.user_id,
+    });
     return res.status(201).json({
         message:"Event created successfully",
         data:event
@@ -150,14 +151,34 @@ const { name, category, location, date, minPrice, maxPrice } = req.query;
         });
     }
 
-    const events = await Event.find(filter)
-        .populate("organizer", "firstName lastName email");
+// Pagination
+const page = Math.max(1, parseInt(req.query.page) || 1);
+const limit = 8;
+const skip = (page - 1) * limit;
 
-    return res.status(200).json({
-        status: true,
-        message: "Events fetched successfully",
-        data: events,
-    });
+// Get events and total count
+const [events, totalEvents] = await Promise.all([
+    Event.find(filter)
+        .populate("organizer", "firstName lastName email")
+        .skip(skip)
+        .limit(limit),
+
+    Event.countDocuments(filter),
+]);
+
+const totalPages = Math.ceil(totalEvents / limit);
+
+return res.status(200).json({
+    status: true,
+    message: "Events fetched successfully",
+    data: events,
+    pagination: {
+        currentPage: page,
+        totalPages,
+        totalEvents,
+        limit,
+    },
+});
 
 } catch (error) {
     console.error("GET ALL EVENTS ERROR:", error);
@@ -335,10 +356,42 @@ const deleteEvent= async(req,res)=>{
     });
     }
 }
+
+// Get events created by the logged-in organizer
+const getMyEvents = async (req, res) => {
+  try {
+    //authendication middleware get the logged in organizer id from the jwt tocket 
+    const organizerId = req.user.user_id;
+
+    //find events  match organizer id 
+    const events = await Event.find({
+      organizer: organizerId,
+    })
+      .populate("organizer", "firstName lastName email")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      status: true,
+      message: "My events fetched successfully",
+      data: events,
+      totalEvents: events.length,
+    });
+  } catch (error) {
+    console.error("GET MY EVENTS ERROR:", error);
+
+    return res.status(500).json({
+      status: false,
+      message: error.message || "Failed to fetch your events",
+    });
+  }
+};
+
+
 module.exports = {
   createEvent,
   getAllEvents,
   getEventById,
   updateEvent,
-  deleteEvent
+  deleteEvent,
+  getMyEvents
 }

@@ -1,6 +1,6 @@
 const express = require("express");
 
-const { createBooking,getMybookings,getAllbookings,cancelBooking,getOrganizerBookings} = require("../controllers/bookingController");
+const { createBooking,getMybookings,getAllbookings,cancelBooking,getOrganizerBookings,getBookingById,getOrganizerBookingById} = require("../controllers/bookingController");
 
 const authMiddleware = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
@@ -49,6 +49,18 @@ router.delete(
 );
 
 router.get("/getorganizersbooking", authMiddleware, roleMiddleware(["organizer"]),getOrganizerBookings)
+router.get(
+  "/:id",
+  authMiddleware,
+  roleMiddleware(["user"]),
+  getBookingById
+);
 
+router.get(
+  "/organizer/:id",
+  authMiddleware,
+  roleMiddleware(["organizer"]),
+  getOrganizerBookingById
+);
 
 module.exports = router;
