@@ -10,15 +10,19 @@ const bookingRoutes = require("./routes/bookingRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
+const favoriteRoutes = require("./routes/favoriteRoutes");
 
 
 const app = express();
 
 app.use(
-cors({
-origin: "http://localhost:3000",
-credentials: true,
-})
+  cors({
+    origin: [
+      "http://localhost:3000",
+      "https://YOUR-VERCEL-DOMAIN.vercel.app",
+    ],
+    credentials: true,
+  })
 );
 
 // Stripe webhook must receive the raw request body.
@@ -61,6 +65,9 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/payments", paymentRoutes);
 
 app.use("/api/payments", require("./routes/razorpayRoutes"));
+
+//wishlist routes
+app.use("/api/favorites", favoriteRoutes);
 
 connectDB();
 
