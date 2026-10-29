@@ -4,6 +4,9 @@ const authMiddleware = require("../middleware/authMiddleware");
 const { check } = require("express-validator");
 const roleMiddleware = require("../middleware/roleMiddleware");
 const upload = require("../middleware/uploadMiddleware");
+const { createReport } = require("../controllers/reportController");
+const Report = require("../models/report");
+
 
 const router = express.Router();
 
@@ -91,6 +94,19 @@ router.delete("/:id",authMiddleware,  roleMiddleware(["organizer"]),
       .withMessage("Invalid event ID"),
   ],
 deleteEvent)
+
+//create report for an event
+router.post(
+"/:id/report",
+authMiddleware,
+roleMiddleware(["user"]),
+async (req, res, next) => {
+req.body.event = req.params.id;
+next();
+},
+createReport
+);
+
 
 
 module.exports = router;

@@ -1,6 +1,15 @@
 const express = require("express");
 
-const { createBooking,getMybookings,getAllbookings,cancelBooking,getOrganizerBookings,getBookingById,getOrganizerBookingById} = require("../controllers/bookingController");
+const {
+  createBooking,
+  getMybookings,
+  getAllbookings,
+  cancelBooking,
+  getOrganizerBookings,
+  getBookingById,
+  getOrganizerBookingById,
+  verifyTicket, // New
+} = require("../controllers/bookingController");
 
 const authMiddleware = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
@@ -32,28 +41,33 @@ router.post(
   createBooking
 );
 
-router.get("/getmybookings",authMiddleware,roleMiddleware(["user"]),getMybookings)
-router.get("/getAllbookings", authMiddleware,roleMiddleware(["admin"]),getAllbookings)
+router.get(
+  "/getmybookings",
+  authMiddleware,
+  roleMiddleware(["user"]),
+  getMybookings
+);
 
+router.get(
+  "/getAllbookings",
+  authMiddleware,
+  roleMiddleware(["admin"]),
+  getAllbookings
+);
 
 router.delete(
   "/cancel/:id",
   authMiddleware,
   roleMiddleware(["user"]),
-  [
-    check("id")
-      .isMongoId()
-      .withMessage("Invalid booking ID"),
-  ],
+  [check("id").isMongoId().withMessage("Invalid booking ID")],
   cancelBooking
 );
 
-router.get("/getorganizersbooking", authMiddleware, roleMiddleware(["organizer"]),getOrganizerBookings)
 router.get(
-  "/:id",
+  "/getorganizersbooking",
   authMiddleware,
-  roleMiddleware(["user"]),
-  getBookingById
+  roleMiddleware(["organizer"]),
+  getOrganizerBookings
 );
 
 router.get(
@@ -61,6 +75,21 @@ router.get(
   authMiddleware,
   roleMiddleware(["organizer"]),
   getOrganizerBookingById
+);
+
+router.get(
+  "/:id",
+  authMiddleware,
+  roleMiddleware(["user"]),
+  getBookingById
+);
+
+// New QR ticket verification route
+router.post(
+  "/verify-ticket",
+  authMiddleware,
+  roleMiddleware(["organizer"]),
+  verifyTicket
 );
 
 module.exports = router;

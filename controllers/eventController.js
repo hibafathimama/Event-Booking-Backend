@@ -1,5 +1,7 @@
 const Event =require("../models/event")
 const { validationResult } = require("express-validator");
+const Booking = require("../models/booking");
+const Notification = require("../models/notification");
 
 //create event
   const createEvent= async (req,res)=>{
@@ -72,124 +74,107 @@ const { validationResult } = require("express-validator");
 
 //get all event
 const getAllEvents = async (req, res) => {
-try {
-const { name, category, location, date, minPrice, maxPrice } = req.query;
+  try {
+    const {
+      search,
+      category,
+      location,
+      date,
+      minPrice,
+      maxPrice,
+      page = 1,
+      limit = 10,
+    } = req.query;
 
-    const filter = {};
+    // Show only active events to users.
+    const filter = { isActive: true };
 
-    // Search by event name
-    if (name) {
-        filter.eventName = { $regex: name, $options: "i" };
+    // Search by event name.
+    if (search) {
+      filter.eventName = { $regex: search, $options: "i" };
     }
 
-    // Search by category
+    // Filter by category.
     if (category) {
-        filter.category = { $regex: category, $options: "i" };
+      filter.category = { $regex: category, $options: "i" };
     }
 
-    // Search by location
+    // Filter by location.
     if (location) {
-        filter.location = { $regex: location, $options: "i" };
+      filter.location = { $regex: location, $options: "i" };
     }
 
-    // Filter by date
+    // Filter by date.
     if (date) {
-        const selectedDate = new Date(date);
+      const selectedDate = new Date(date);
 
-        if (isNaN(selectedDate.getTime())) {
-            return res.status(400).json({
-                message: "Invalid date format. Use YYYY-MM-DD",
-            });
-        }
-
-        const nextDate = new Date(selectedDate);
-        nextDate.setDate(nextDate.getDate() + 1);
-
-        filter.date = {
-            $gte: selectedDate,
-            $lt: nextDate,
-        };
-    }
-
-    // Filter by minimum price
-    if (minPrice !== undefined && minPrice !== "") {
-        const minimum = Number(minPrice);
-
-        if (!Number.isFinite(minimum) || minimum < 0) {
-            return res.status(400).json({
-                message: "Minimum price must be a valid non-negative number",
-            });
-        }
-
-        filter.ticketPrice = { $gte: minimum };
-    }
-
-    // Filter by maximum price
-    if (maxPrice !== undefined && maxPrice !== "") {
-        const maximum = Number(maxPrice);
-
-        if (!Number.isFinite(maximum) || maximum < 0) {
-            return res.status(400).json({
-                message: "Maximum price must be a valid non-negative number",
-            });
-        }
-
-        filter.ticketPrice = {
-            ...filter.ticketPrice,
-            $lte: maximum,
-        };
-    }
-
-    // Check that minimum price is not greater than maximum price
-    if (
-        filter.ticketPrice?.$gte !== undefined &&
-        filter.ticketPrice?.$lte !== undefined &&
-        filter.ticketPrice.$gte > filter.ticketPrice.$lte
-    ) {
+      if (Number.isNaN(selectedDate.getTime())) {
         return res.status(400).json({
-            message: "Minimum price cannot be greater than maximum price",
+          status: false,
+          message: "Invalid date.",
         });
+      }
+
+      const startDate = new Date(selectedDate);
+      startDate.setHours(0, 0, 0, 0);
+
+      const endDate = new Date(selectedDate);
+      endDate.setHours(23, 59, 59, 999);
+
+      filter.date = {
+        $gte: startDate,
+        $lte: endDate,
+      };
     }
 
-// Pagination
-const page = Math.max(1, parseInt(req.query.page) || 1);
-const limit = 8;
-const skip = (page - 1) * limit;
+    // Filter by ticket price.
+    if (minPrice !== undefined || maxPrice !== undefined) {
+      filter.ticketPrice = {};
 
-// Get events and total count
-const [events, totalEvents] = await Promise.all([
-    Event.find(filter)
+      if (minPrice !== undefined && minPrice !== "") {
+        filter.ticketPrice.$gte = Number(minPrice);
+      }
+
+      if (maxPrice !== undefined && maxPrice !== "") {
+        filter.ticketPrice.$lte = Number(maxPrice);
+      }
+    }
+
+    const currentPage = Math.max(1, Number(page) || 1);
+    const pageLimit = Math.max(1, Number(limit) || 10);
+    const skip = (currentPage - 1) * pageLimit;
+
+    const [events, totalEvents] = await Promise.all([
+      Event.find(filter)
         .populate("organizer", "firstName lastName email")
         .skip(skip)
-        .limit(limit),
+        .limit(pageLimit)
+        .sort({ date: 1 }),
 
-    Event.countDocuments(filter),
-]);
+      Event.countDocuments(filter),
+    ]);
 
-const totalPages = Math.ceil(totalEvents / limit);
-
-return res.status(200).json({
-    status: true,
-    message: "Events fetched successfully",
-    data: events,
-    pagination: {
-        currentPage: page,
-        totalPages,
+    return res.status(200).json({
+      status: true,
+      message: "Events fetched successfully.",
+      data: events,
+      pagination: {
         totalEvents,
-        limit,
-    },
-});
-
-} catch (error) {
+        currentPage,
+        totalPages: Math.ceil(totalEvents / pageLimit),
+        limit: pageLimit,
+      },
+    });
+  } catch (error) {
     console.error("GET ALL EVENTS ERROR:", error);
 
     return res.status(500).json({
-        message: error.message || "Failed to fetch events",
+      status: false,
+      message: "Failed to fetch events.",
     });
-}
-
-
+  }
 };
+
 
 
 //get one event byid
@@ -277,6 +262,12 @@ const updateEvent = async (req, res) => {
       availableSeats,
     };
 
+    // Find users who booked this event
+    const bookings = await Booking.find({
+      event: id,
+      status: { $ne: "cancelled" },
+    }).select("user");
+
     const updatedEvent = await Event.findOneAndUpdate(
       {
         _id: id,
@@ -292,6 +283,26 @@ const updateEvent = async (req, res) => {
         message: "Event not found",
       });
     }
+
+    
+      // Send in-app notifications to users who booked this event
+      const notifiedUsers = [
+        ...new Set(bookings.map((booking) => booking.user.toString())),
+      ];
+
+      for (const userId of notifiedUsers) {
+        try {
+          await Notification.create({
+            user: userId,
+            type: "event_update",
+            message: `The event "${updatedEvent.eventName}" has been updated. Please check the latest event details.`,
+          });
+        } catch (notificationError) {
+          console.error("EVENT UPDATE NOTIFICATION ERROR:", notificationError);
+        }
+      }
+
+
 
     // Success
     return res.status(200).json({

@@ -8,6 +8,9 @@ const userRoutes = require("./routes/userRoutes");
 const eventRoutes = require("./routes/eventRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
+
 
 const app = express();
 
@@ -18,7 +21,16 @@ credentials: true,
 })
 );
 
+// Stripe webhook must receive the raw request body.
+app.use(
+  "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
+  require("./controllers/paymentWebhookController").handleStripeWebhook
+);
+
+// Parse JSON for all other routes.
 app.use(express.json());
+
 
 // Read cookies from incoming requests
 app.use(cookieParser());
@@ -41,6 +53,14 @@ app.use("/api/bookings", bookingRoutes);
 
 // Admin routes
 app.use("/api/admin", adminRoutes);
+
+// Notification routes
+app.use("/api/notifications", notificationRoutes);
+
+//payment routes
+app.use("/api/payments", paymentRoutes);
+
+app.use("/api/payments", require("./routes/razorpayRoutes"));
 
 connectDB();
 

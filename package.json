@@ -21,7 +21,10 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.10.3",
     "multer": "^2.4.0",
-    "nodemailer": "^10.0.16"
+    "nodemailer": "^10.0.16",
+    "qrcode": "^1.5.4",
+    "razorpay": "^2.9.8",
+    "stripe": "^23.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

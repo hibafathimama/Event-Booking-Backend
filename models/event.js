@@ -48,7 +48,7 @@ const eventSchema = new mongoose.Schema(
       min: 0,
     },
 
-      totalSeats: {
+    totalSeats: {
       type: Number,
       required: true,
       min: 1,
@@ -69,6 +69,12 @@ const eventSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+    },
+
+    // Admin can deactivate or reactivate an event.
+    isActive: {
+      type: Boolean,
+      default: true,
     },
   },
   {

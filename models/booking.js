@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 
 const bookingSchema = new mongoose.Schema(
   {
@@ -6,6 +7,23 @@ const bookingSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
+    },
+
+    ticketToken: {
+      type: String,
+      unique: true,
+      sparse: true,
+      default: undefined,
+    },
+
+    checkedIn: {
+      type: Boolean,
+      default: false,
+    },
+
+    checkedInAt: {
+      type: Date,
+      default: null,
     },
 
     user: {
@@ -40,16 +58,41 @@ const bookingSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["confirmed", "cancelled"],
-      default: "confirmed",
+      enum: ["pending", "confirmed", "cancelled"],
+      default: "pending",
     },
+
+    paymentStatus: {
+      type: String,
+      enum: ["pending", "paid", "failed", "expired", "refunded"],
+      default: "pending",
+    },
+
+    stripeSessionId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    razorpayOrderId: {
+    type: String,
+    default: null,
+    index: true,
+  },
+
+  razorpayPaymentId: {
+    type: String,
+    default: null,
+    unique: true,
+    sparse: true,
+  },
   },
   {
     timestamps: true,
   }
 );
+
 const Booking =
-    mongoose.models.Booking ||
-    mongoose.model("Booking", bookingSchema);
+  mongoose.models.Booking ||
+  mongoose.model("Booking", bookingSchema);
 
 module.exports = Booking;

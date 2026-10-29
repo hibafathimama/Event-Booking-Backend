@@ -4,6 +4,7 @@ const User = require("../models/user");
 const { validationResult } = require("express-validator");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
+const Notification = require("../models/notification");
 
 
 const registerUser = async (req, res) => {
@@ -18,7 +19,7 @@ const registerUser = async (req, res) => {
     }
 
     const { firstName, lastName, email, password, role } = req.body;
-    
+
     if (!req.file) {
     return res.status(400).json({
         message: "Profile image is required",
@@ -49,15 +50,32 @@ const registerUser = async (req, res) => {
       ? `/uploads/profiles/${req.file.filename}`
       : "";
 
-    // Create user
-    const user = await User.create({
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
-      role: role || "user",
-      image,
-    });
+const selectedRole = role || "user";
+
+        // Only organizers need admin verification
+        const verificationStatus =
+        selectedRole === "organizer" ? "pending" : "approved";
+
+        // Create user
+        const user = await User.create({
+        firstName,
+        lastName,
+        email,
+        password: hashedPassword,
+        role: selectedRole,
+        verificationStatus,
+        image,
+        });
+
+        // Notify admin when a new organizer registers
+        if (selectedRole === "organizer") {
+        await Notification.create({
+            message: `New organizer registration: ${user.firstName} ${user.lastName} requires verification.`,
+            type: "organizer_verification",
+            organizer: user._id,
+        });
+        }
+
 
     // Generate JWT token
     const token = jwt.sign(
@@ -72,18 +90,24 @@ const registerUser = async (req, res) => {
     );
 
     // Send response
-    res.status(201).json({
-      message: "User registered successfully",
-      data: {
+    return res.status(201).json({
+    status: true,
+    message:
+        selectedRole === "organizer"
+        ? "Registration successful! Your account is awaiting admin verification."
+        : "Registration successful!",
+    data: {
         id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
         role: user.role,
+        verificationStatus: user.verificationStatus,
         image: user.image,
-      },
-      accessToken: token,
+    },
+    accessToken: token,
     });
+
   } catch (error) {
     console.log("REGISTER USER ERROR:", error);
 
@@ -117,9 +141,9 @@ const loginUser=async(req,res)=>{
     }
 
     //find user by email
-    const user=await User.findOne({email}).select(
-      "_id firstName lastName email role password"
-    );
+     const user = await User.findOne({ email }).select(
+     "_id firstName lastName email role password verificationStatus"
+     );
 
     //check if user exist 
     if(!user){
@@ -137,12 +161,21 @@ const loginUser=async(req,res)=>{
       });
     }
 
-            console.log(
-  "LOGIN SECRET:",
-  process.env.JWT_SECRET
-    ? "Loaded"
-    : "Missing"
-);
+    // Check whether the organizer is approved
+        if (
+        user.role === "organizer" &&
+        user.verificationStatus !== "approved"
+        ) {
+        return res.status(403).json({
+            status: false,
+            message:
+            user.verificationStatus === "rejected"
+                ? "Your organizer application has been rejected. Please contact the admin."
+                : "Your account is awaiting admin approval. You cannot log in yet.",
+        });
+        }
+
+
 const crypto = require("crypto");
 
 console.log(
@@ -171,17 +204,18 @@ console.log(
   crypto.createHash("sha256").update(token).digest("hex").slice(0, 12)
 );
 
-    //send response 
+    // Send response
     return res.status(200).json({
-      status:true,
-      message:"User logges successfully",
-      data:{
-        firstName:user.firstName,
-        lastName:user.lastName,
-        email:user.email,
-        role:user.role
-      },
-      accessToken:token,
+    status: true,
+    message: "Login successful!",
+    data: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: user.role,
+        verificationStatus: user.verificationStatus,
+    },
+    accessToken: token,
     });
   }catch(error){
     return res.status(500).json({

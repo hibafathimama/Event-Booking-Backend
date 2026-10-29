@@ -7,8 +7,24 @@ const {
     getAllEvents,
     getEventByid,
     deleteEvent,
-    getDashboardStats
+    toggleEventStatus,
+    updateEvent,
+    getDashboardStats,
+    getAllBookings,
+    cancelBooking
 } = require("../controllers/adminController");
+
+
+const {
+  getAdminNotifications,
+  approveOrganizer,
+  rejectOrganizer,
+} = require("../controllers/notificationController");
+
+const {
+  getAllReports,
+  updateReport,
+} = require("../controllers/reportController");
 
 const authMiddleware = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
@@ -104,12 +120,99 @@ router.delete(
     deleteEvent
 );
 
+// Activate or deactivate event
+router.patch(
+    "/events/:id/toggle-status",
+    authMiddleware,
+    roleMiddleware(["admin"]),
+    [
+        param("id")
+            .isMongoId()
+            .withMessage("Invalid event ID")
+    ],
+    validateRequest,
+    toggleEventStatus
+);
+
+
+// Update event
+router.put(
+    "/events/:id",
+    authMiddleware,
+    roleMiddleware(["admin"]),
+    [
+        param("id")
+            .isMongoId()
+            .withMessage("Invalid event ID")
+    ],
+    validateRequest,
+    updateEvent
+);
+
 // Dashboard statistics
 router.get(
     "/dashboard-stats",
     authMiddleware,
     roleMiddleware(["admin"]),
     getDashboardStats
+);
+
+// Get all bookings
+router.get(
+  "/bookings",
+  authMiddleware,
+  roleMiddleware(["admin"]),
+  getAllBookings
+);
+
+router.patch(
+  "/bookings/:id/cancel",
+  authMiddleware,
+  roleMiddleware(["admin"]),
+  cancelBooking
+);
+
+// Get notifications for admin
+router.get(
+  "/notifications",
+  authMiddleware,
+  roleMiddleware(["admin"]),
+  getAdminNotifications
+);
+
+// Approve organizer
+router.patch(
+  "/organizers/:id/approve",
+  authMiddleware,
+  roleMiddleware(["admin"]),
+  [param("id").isMongoId().withMessage("Invalid organizer ID")],
+  validateRequest,
+  approveOrganizer
+);
+
+// Reject organizer
+router.patch(
+  "/organizers/:id/reject",
+  authMiddleware,
+  roleMiddleware(["admin"]),
+  [param("id").isMongoId().withMessage("Invalid organizer ID")],
+  validateRequest,
+  rejectOrganizer
+);
+
+// Report management - admin only
+router.get(
+  "/reports",
+  authMiddleware,
+  roleMiddleware(["admin"]),
+  getAllReports
+);
+
+router.patch(
+  "/reports/:id",
+  authMiddleware,
+  roleMiddleware(["admin"]),
+  updateReport
 );
 
 module.exports = router;
