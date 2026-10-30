@@ -19,11 +19,12 @@ app.use(
   cors({
     origin: [
       "http://localhost:3000",
-      "https://YOUR-VERCEL-DOMAIN.vercel.app",
+      "https://gather-frontend-b37d.vercel.app",
     ],
     credentials: true,
   })
 );
+
 
 // Stripe webhook must receive the raw request body.
 app.use(
