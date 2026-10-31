@@ -4,32 +4,33 @@ const Booking = require("../models/booking");
 const Notification = require("../models/notification");
 
 //create event
-  const createEvent= async (req,res)=>{
-    try{
-        //validation
-        const errors = validationResult(req);
+const createEvent = async (req, res) => {
+  try {
+    // Validate request
+    const errors = validationResult(req);
 
-        if (!errors.isEmpty()) {
-        return res.status(422).json({
-            message: errors.array()[0].msg,
-        });
-        }
+    if (!errors.isEmpty()) {
+      return res.status(422).json({
+        message: errors.array()[0].msg,
+      });
+    }
 
-      const {
-        eventName,
-        category,
-        date,
-        time,
-        venue,
-        location,
-        description,
-        ticketPrice,
-        totalSeats,
-      } = req.body;
+    const {
+      eventName,
+      category,
+      date,
+      time,
+      venue,
+      location,
+      description,
+      ticketPrice,
+      totalSeats,
+    } = req.body;
 
-        const image = req.file ? `/uploads/${req.file.filename}` : null;
+    // Save the Cloudinary URL
+    const image = req.file ? req.file.path : null;
 
-        if (
+    if (
       !eventName ||
       !category ||
       !date ||
@@ -44,6 +45,7 @@ const Notification = require("../models/notification");
         message: "All fields are required",
       });
     }
+
     const event = await Event.create({
       eventName,
       category,
@@ -58,19 +60,20 @@ const Notification = require("../models/notification");
       image,
       organizer: req.user.user_id,
     });
+
     return res.status(201).json({
-        message:"Event created successfully",
-        data:event
+      message: "Event created successfully",
+      data: event,
     });
+  } catch (error) {
+    console.error("Create Event Error:", error);
 
-    }catch (error) {
-  console.log("Create Event Error:", error);
-
-  return res.status(500).json({
-    message: error.message,
-  });
-}
+    return res.status(500).json({
+      message: error.message,
+    });
+  }
 };
+
 
 //get all event
 const getAllEvents = async (req, res) => {

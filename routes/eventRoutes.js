@@ -17,20 +17,23 @@ router.post(
     upload.single("image"),
     createEvent
 );
+// Get all events (public)
+router.get("/getevent", getAllEvents);
 
-router.get( "/my-events", authMiddleware, roleMiddleware(["organizer"]), getMyEvents );
-
-
+// Get events created by the logged-in organizer
 router.get(
-    "/getevent",
-    authMiddleware,
-    roleMiddleware(["user","organizer"]),
-    getAllEvents
+  "/my-events",
+  authMiddleware,
+  roleMiddleware(["organizer"]),
+  getMyEvents
 );
 
 // Get a single event by ID
- router.get( "/:id", [ check("id") .isMongoId() .withMessage("Invalid event ID"), ], getEventById );
-
+router.get(
+  "/:id",
+  [check("id").isMongoId().withMessage("Invalid event ID")],
+  getEventById
+);
 
 router.put("/:id",authMiddleware,  roleMiddleware(["organizer"]),
 [
