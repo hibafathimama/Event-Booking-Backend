@@ -65,13 +65,17 @@ io.on("connection", (socket) => {
 
 
 
+const cors = require("cors");
+
 app.use(
   cors({
     origin: [
       "http://localhost:3000",
-      "https://gather-frontend-b37d.vercel.app",
+      "https://gather-frontend-o74n.vercel.app",
     ],
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
