@@ -16,6 +16,8 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const favoriteRoutes = require("./routes/favoriteRoutes");
 const messageRoutes = require("./routes/messageRoutes");
+const reviewRoutes = require("./routes/reviewRoutes");
+
 
 
 const app = express();
@@ -122,6 +124,8 @@ app.use("/api/payments", require("./routes/razorpayRoutes"));
 app.use("/api/favorites", favoriteRoutes);
 
 app.use("/api/messages", messageRoutes);
+
+app.use("/api/reviews", reviewRoutes);
 
 connectDB();
 
