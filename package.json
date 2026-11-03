@@ -26,6 +26,7 @@
     "nodemailer": "^10.0.16",
     "qrcode": "^1.5.4",
     "razorpay": "^2.9.8",
+    "socket.io": "^4.8.4",
     "stripe": "^23.0.1"
   },
   "devDependencies": {

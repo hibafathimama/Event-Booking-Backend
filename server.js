@@ -3,6 +3,9 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 require("dotenv").config();
 const path = require("path");
+const http = require("http");
+const { Server } = require("socket.io");
+const jwt = require("jsonwebtoken");
 
 const connectDB = require("./config/connectDB");
 const userRoutes = require("./routes/userRoutes");
@@ -16,6 +19,49 @@ const messageRoutes = require("./routes/messageRoutes");
 
 
 const app = express();
+const server = http.createServer(app);
+
+const io = new Server(server, {
+  cors: {
+    origin: [
+      "http://localhost:3000",
+      "https://gather-frontend-b37d.vercel.app",
+    ],
+    credentials: true,
+  },
+});
+
+app.set("io", io);
+io.use((socket, next) => {
+  try {
+    const token = socket.handshake.auth.token;
+
+    if (!token) {
+      return next(new Error("Authentication required"));
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    socket.user = {
+      user_id: decoded.user_id,
+      role: decoded.role,
+    };
+
+    next();
+  } catch (error) {
+    next(new Error("Invalid or expired token"));
+  }
+});
+
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
+
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+  });
+});
+
+
 
 app.use(
   cors({
@@ -81,6 +127,6 @@ connectDB();
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-console.log(`Server running on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
