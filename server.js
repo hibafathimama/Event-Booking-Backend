@@ -12,6 +12,7 @@ const adminRoutes = require("./routes/adminRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const favoriteRoutes = require("./routes/favoriteRoutes");
+const messageRoutes = require("./routes/messageRoutes");
 
 
 const app = express();
@@ -73,6 +74,8 @@ app.use("/api/payments", require("./routes/razorpayRoutes"));
 
 //wishlist routes
 app.use("/api/favorites", favoriteRoutes);
+
+app.use("/api/messages", messageRoutes);
 
 connectDB();
 
