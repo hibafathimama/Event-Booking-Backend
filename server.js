@@ -8,6 +8,7 @@ const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 
 const connectDB = require("./config/connectDB");
+
 const userRoutes = require("./routes/userRoutes");
 const eventRoutes = require("./routes/eventRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
@@ -18,123 +19,127 @@ const favoriteRoutes = require("./routes/favoriteRoutes");
 const messageRoutes = require("./routes/messageRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
 
-
-
 const app = express();
 const server = http.createServer(app);
 
+// Allowed frontend origins
+const allowedOrigins = [
+"http://localhost:3000",
+"https://gather-frontend-o74n.vercel.app",
+];
+
+// Express CORS configuration
+app.use(
+cors({
+origin: allowedOrigins,
+credentials: true,
+methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+allowedHeaders: ["Content-Type", "Authorization"],
+})
+);
+
+// Socket.IO configuration
 const io = new Server(server, {
-  cors: {
-    origin: [
-      "http://localhost:3000",
-      "https://gather-frontend-b37d.vercel.app",
-    ],
-    credentials: true,
-  },
+cors: {
+origin: allowedOrigins,
+credentials: true,
+methods: ["GET", "POST"],
+},
 });
 
 app.set("io", io);
+
+// Socket.IO authentication
 io.use((socket, next) => {
-  try {
-    const token = socket.handshake.auth.token;
+try {
+const token = socket.handshake.auth.token;
 
-    if (!token) {
-      return next(new Error("Authentication required"));
-    }
+```
+if (!token) {
+  return next(new Error("Authentication required"));
+}
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    socket.user = {
-      user_id: decoded.user_id,
-      role: decoded.role,
-    };
+socket.user = {
+  user_id: decoded.user_id,
+  role: decoded.role,
+};
 
-    next();
-  } catch (error) {
-    next(new Error("Invalid or expired token"));
-  }
+next();
+```
+
+} catch (error) {
+next(new Error("Invalid or expired token"));
+}
 });
 
+// Socket.IO connection
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+console.log("User connected:", socket.id);
 
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-  });
+socket.on("disconnect", () => {
+console.log("User disconnected:", socket.id);
 });
-
-
-
-const cors = require("cors");
-
-app.use(
-  cors({
-    origin: [
-      "http://localhost:3000",
-      "https://gather-frontend-o74n.vercel.app",
-    ],
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-
+});
 
 // Stripe webhook must receive the raw request body.
 app.use(
-  "/api/payments/webhook",
-  express.raw({ type: "application/json" }),
-  require("./controllers/paymentWebhookController").handleStripeWebhook
+"/api/payments/webhook",
+express.raw({ type: "application/json" }),
+require("./controllers/paymentWebhookController").handleStripeWebhook
 );
 
-// Parse JSON for all other routes.
+// Parse JSON for other routes.
 app.use(express.json());
 
-
-// Read cookies from incoming requests
+// Read cookies from incoming requests.
 app.use(cookieParser());
 
-// Serve uploaded images
+// Serve uploaded images.
 app.use(
-  "/uploads",
-  express.static(path.join(__dirname, "uploads"))
+"/uploads",
+express.static(path.join(__dirname, "uploads"))
 );
 
+// Test route.
 app.get("/", (req, res) => {
 res.send("Backend is running...");
 });
 
-// User routes
+// User routes.
 app.use("/api/users", userRoutes);
 
-// Event routes
+// Event routes.
 app.use("/api/events", eventRoutes);
 
-// Booking routes
+// Booking routes.
 app.use("/api/bookings", bookingRoutes);
 
-// Admin routes
+// Admin routes.
 app.use("/api/admin", adminRoutes);
 
-// Notification routes
+// Notification routes.
 app.use("/api/notifications", notificationRoutes);
 
-//payment routes
+// Payment routes.
 app.use("/api/payments", paymentRoutes);
-
 app.use("/api/payments", require("./routes/razorpayRoutes"));
 
-//wishlist routes
+// Wishlist routes.
 app.use("/api/favorites", favoriteRoutes);
 
+// Message routes.
 app.use("/api/messages", messageRoutes);
 
+// Review routes.
 app.use("/api/reviews", reviewRoutes);
 
+// Connect MongoDB.
 connectDB();
 
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+console.log(`Server running on port ${PORT}`);
 });
