@@ -5,74 +5,140 @@ const Notification = require("../models/notification");
 
 //create event
 const createEvent = async (req, res) => {
+try {
+const errors = validationResult(req);
+
+if (!errors.isEmpty()) {
+  return res.status(422).json({
+    message: errors.array()[0].msg,
+  });
+}
+
+const {
+  eventName,
+  category,
+  date,
+  time,
+  venue,
+  location,
+  description,
+  ticketPrice,
+  totalSeats,
+  seatingType = "general",
+  seats,
+} = req.body;
+
+const image = req.file ? req.file.path : null;
+
+if (
+  !eventName ||
+  !category ||
+  !date ||
+  !time ||
+  !venue ||
+  !location ||
+  !description ||
+  ticketPrice === undefined ||
+  totalSeats === undefined
+) {
+  return res.status(400).json({
+    message: "All fields are required",
+  });
+}
+
+const seatCount = Number(totalSeats);
+const price = Number(ticketPrice);
+
+if (
+  !Number.isInteger(seatCount) ||
+  seatCount < 1 ||
+  !Number.isFinite(price) ||
+  price < 0
+) {
+  return res.status(400).json({
+    message: "Invalid ticket price or total seats",
+  });
+}
+
+if (!["general", "reserved"].includes(seatingType)) {
+  return res.status(400).json({
+    message: "Invalid seating type",
+  });
+}
+
+let eventSeats = [];
+
+// Validate individual seats for reserved seating events.
+if (seatingType === "reserved") {
   try {
-    // Validate request
-    const errors = validationResult(req);
-
-    if (!errors.isEmpty()) {
-      return res.status(422).json({
-        message: errors.array()[0].msg,
-      });
-    }
-
-    const {
-      eventName,
-      category,
-      date,
-      time,
-      venue,
-      location,
-      description,
-      ticketPrice,
-      totalSeats,
-    } = req.body;
-
-    // Save the Cloudinary URL
-    const image = req.file ? req.file.path : null;
-
-    if (
-      !eventName ||
-      !category ||
-      !date ||
-      !time ||
-      !venue ||
-      !location ||
-      !description ||
-      ticketPrice === undefined ||
-      totalSeats === undefined
-    ) {
-      return res.status(400).json({
-        message: "All fields are required",
-      });
-    }
-
-    const event = await Event.create({
-      eventName,
-      category,
-      date,
-      time,
-      venue,
-      location,
-      description,
-      ticketPrice: Number(ticketPrice),
-      totalSeats: Number(totalSeats),
-      availableSeats: Number(totalSeats),
-      image,
-      organizer: req.user.user_id,
-    });
-
-    return res.status(201).json({
-      message: "Event created successfully",
-      data: event,
-    });
+    eventSeats =
+      typeof seats === "string" ? JSON.parse(seats) : seats;
   } catch (error) {
-    console.error("Create Event Error:", error);
-
-    return res.status(500).json({
-      message: error.message,
+    return res.status(400).json({
+      message: "Invalid seats data",
     });
   }
+
+  if (!Array.isArray(eventSeats) || eventSeats.length !== seatCount) {
+    return res.status(400).json({
+      message: "The number of seats must match total seats",
+    });
+  }
+
+  const seatNumbers = eventSeats.map((seat) =>
+    typeof seat === "string" ? seat.trim() : ""
+  );
+
+  if (
+    seatNumbers.some((seat) => !seat) ||
+    new Set(seatNumbers).size !== seatNumbers.length
+  ) {
+    return res.status(400).json({
+      message: "Seat numbers must be valid and unique",
+    });
+  }
+
+  eventSeats = seatNumbers.map((seatNumber) => ({
+    seatNumber,
+    status: "available",
+  }));
+}
+
+const event = await Event.create({
+  eventName,
+  category,
+  date,
+  time,
+  venue,
+  location,
+  description,
+  ticketPrice: price,
+  totalSeats: seatCount,
+  availableSeats: seatCount,
+  seatingType,
+  seats: eventSeats,
+  image,
+  organizer: req.user.user_id,
+});
+
+return res.status(201).json({
+  message: "Event created successfully",
+  data: event,
+});
+
+
+} catch (error) {
+console.error("Create Event Error:", error);
+
+
+return res.status(500).json({
+  message: error.message,
+});
+
+
+}
 };
+
 
 
 //get all event

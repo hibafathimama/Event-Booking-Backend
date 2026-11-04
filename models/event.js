@@ -1,85 +1,126 @@
 const mongoose = require("mongoose");
 
+const seatSchema = new mongoose.Schema(
+{
+seatNumber: {
+type: String,
+required: true,
+trim: true,
+},
+
+status: {
+  type: String,
+  enum: ["available", "reserved", "booked"],
+  default: "available",
+},
+reservationOrderId: {
+  type: String,
+  default: null,
+},
+
+reservedUntil: {
+  type: Date,
+  default: null,
+},
+
+},
+{ _id: false }
+);
+
 const eventSchema = new mongoose.Schema(
-  {
-    eventName: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+{
+eventName: {
+type: String,
+required: true,
+trim: true,
+},
 
-    category: {
-      type: String,
-      required: true,
-      trim: true,
-    },
 
-    date: {
-      type: Date,
-      required: true,
-    },
+category: {
+  type: String,
+  required: true,
+  trim: true,
+},
 
-    time: {
-      type: String,
-      required: true,
-    },
+date: {
+  type: Date,
+  required: true,
+},
 
-    venue: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+time: {
+  type: String,
+  required: true,
+},
 
-    location: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+venue: {
+  type: String,
+  required: true,
+  trim: true,
+},
 
-    description: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+location: {
+  type: String,
+  required: true,
+  trim: true,
+},
 
-    ticketPrice: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
+description: {
+  type: String,
+  required: true,
+  trim: true,
+},
 
-    totalSeats: {
-      type: Number,
-      required: true,
-      min: 1,
-    },
+ticketPrice: {
+  type: Number,
+  required: true,
+  min: 0,
+},
 
-    availableSeats: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
+totalSeats: {
+  type: Number,
+  required: true,
+  min: 1,
+},
 
-    image: {
-      type: String,
-      default: null,
-    },
+availableSeats: {
+  type: Number,
+  required: true,
+  min: 0,
+},
 
-    organizer: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
+// General admission or reserved seating
+seatingType: {
+  type: String,
+  enum: ["general", "reserved"],
+  default: "general",
+},
 
-    // Admin can deactivate or reactivate an event.
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
-  },
-  {
-    timestamps: true,
-  }
+// Individual seats for reserved events
+seats: {
+  type: [seatSchema],
+  default: [],
+},
+
+image: {
+  type: String,
+  default: null,
+},
+
+organizer: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "User",
+  required: true,
+},
+
+isActive: {
+  type: Boolean,
+  default: true,
+},
+
+},
+{
+timestamps: true,
+}
 );
 
 const Event = mongoose.model("Event", eventSchema);

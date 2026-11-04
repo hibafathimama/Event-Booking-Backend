@@ -6,8 +6,9 @@ const QRCode = require("qrcode");
 
 const createRazorpayOrder = async (req, res) => {
   try {
-    const { eventId, quantity, ticketType } = req.body;
+    const { eventId, quantity, ticketType, selectedSeats = [] } = req.body;
 
+    // Validate basic booking details
     if (
       !eventId ||
       !ticketType ||
@@ -20,6 +21,7 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
+    // Find event
     const eventData = await Event.findOne({
       _id: eventId,
       isActive: true,
@@ -32,6 +34,39 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
+    // Validate seating type and selected seats
+    if (eventData.seatingType === "reserved") {
+      if (
+        !Array.isArray(selectedSeats) ||
+        selectedSeats.length !== quantity ||
+        new Set(selectedSeats).size !== quantity ||
+        selectedSeats.some(
+          (seat) => typeof seat !== "string" || !seat.trim()
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Please select a valid number of unique seats.",
+        });
+      }
+    } else if (eventData.seatingType === "general") {
+      if (
+        !Array.isArray(selectedSeats) ||
+        selectedSeats.length > 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Seat selection is not available for this event.",
+        });
+      }
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid event seating type.",
+      });
+    }
+
+    // Validate ticket price
     if (
       !Number.isFinite(eventData.ticketPrice) ||
       eventData.ticketPrice <= 0
@@ -42,6 +77,7 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
+    // Check available seats
     if (eventData.availableSeats < quantity) {
       return res.status(400).json({
         success: false,
@@ -49,6 +85,7 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
+    // Validate event date and time
     const eventDateTime = new Date(
       `${new Date(eventData.date).toISOString().split("T")[0]}T${eventData.time}`
     );
@@ -63,6 +100,7 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
+    // Calculate payment amount
     const totalPrice = eventData.ticketPrice * quantity;
     const amountInPaise = Math.round(totalPrice * 100);
 
@@ -76,6 +114,7 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
+    // Create Razorpay order
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: "INR",
@@ -85,8 +124,87 @@ const createRazorpayOrder = async (req, res) => {
         quantity: String(quantity),
         ticketType,
         userId: String(req.user.user_id),
+        selectedSeats: JSON.stringify(selectedSeats),
       },
     });
+
+    // Reserve selected seats for 10 minutes
+    if (eventData.seatingType === "reserved") {
+      const reservedUntil = new Date(Date.now() + 10 * 60 * 1000);
+
+      const reservedEvent = await Event.findOneAndUpdate(
+        {
+          _id: eventId,
+          isActive: true,
+          seatingType: "reserved",
+          availableSeats: { $gte: quantity },
+
+          // All requested seats must currently be available
+          $expr: {
+            $eq: [
+              {
+                $size: {
+                  $filter: {
+                    input: "$seats",
+                    as: "seat",
+                    cond: {
+                      $and: [
+                        { $in: ["$$seat.seatNumber", selectedSeats] },
+                        { $eq: ["$$seat.status", "available"] },
+                      ],
+                    },
+                  },
+                },
+              },
+              quantity,
+            ],
+          },
+        },
+        [
+          {
+            $set: {
+              seats: {
+                $map: {
+                  input: "$seats",
+                  as: "seat",
+                  in: {
+                    $cond: [
+                      { $in: ["$$seat.seatNumber", selectedSeats] },
+                      {
+                        $mergeObjects: [
+                          "$$seat",
+                          {
+                            status: "reserved",
+                            reservationOrderId: order.id,
+                            reservedUntil: reservedUntil,
+                          },
+                        ],
+                      },
+                      "$$seat",
+                    ],
+                  },
+                },
+              },
+              availableSeats: {
+                $subtract: ["$availableSeats", quantity],
+              },
+            },
+          },
+        ],
+        {
+          new: true,
+          updatePipeline: true,
+        }
+      );
+
+      if (!reservedEvent) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "One or more selected seats are no longer available. Please select again.",
+        });
+      }
+    }
 
     return res.status(201).json({
       success: true,
@@ -99,7 +217,7 @@ const createRazorpayOrder = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Razorpay order creation failed:", error.message);
+    console.error("Razorpay order creation failed:", error);
 
     return res.status(500).json({
       success: false,
@@ -111,6 +229,9 @@ const createRazorpayOrder = async (req, res) => {
 const verifyRazorpayPayment = async (req, res) => {
   let reservedEventId = null;
   let reservedQuantity = 0;
+  let reservedSeatNumbers = [];
+  let reservedOrderId = null;
+  let isReservedSeating = false;
   let bookingCreated = false;
 
   try {
@@ -120,6 +241,7 @@ const verifyRazorpayPayment = async (req, res) => {
       razorpay_signature,
     } = req.body;
 
+    // 1. Validate payment details
     if (
       !razorpay_order_id ||
       !razorpay_payment_id ||
@@ -143,7 +265,7 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // Verify the signature using the secret stored on the backend.
+    // 2. Verify Razorpay signature
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -163,13 +285,12 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // Fetch the actual order and payment from Razorpay.
+    // 3. Fetch actual order and payment from Razorpay
     const [order, payment] = await Promise.all([
       razorpay.orders.fetch(razorpay_order_id),
       razorpay.payments.fetch(razorpay_payment_id),
     ]);
 
-    // Make sure the payment belongs to the submitted order.
     if (
       order.id !== razorpay_order_id ||
       payment.order_id !== razorpay_order_id
@@ -180,16 +301,13 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // Do not create a booking for an unpaid or merely authorized payment.
     if (payment.status !== "captured") {
       return res.status(400).json({
         success: false,
-        message:
-          "Payment is not captured yet. Please check the payment status.",
+        message: "Payment is not captured yet.",
       });
     }
 
-    // Check the actual order amount and currency against the payment.
     if (
       order.currency !== "INR" ||
       payment.currency !== order.currency ||
@@ -202,7 +320,7 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // Make sure the order belongs to this logged-in user.
+    // 4. Check order ownership
     const notes = order.notes || {};
 
     if (notes.userId !== String(req.user.user_id)) {
@@ -216,11 +334,25 @@ const verifyRazorpayPayment = async (req, res) => {
     const quantity = Number(notes.quantity);
     const ticketType = notes.ticketType;
 
+    let selectedSeats = [];
+
+    try {
+      selectedSeats = notes.selectedSeats
+        ? JSON.parse(notes.selectedSeats)
+        : [];
+    } catch {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid selected seat details.",
+      });
+    }
+
     if (
       !eventId ||
       !Number.isInteger(quantity) ||
       quantity <= 0 ||
-      !ticketType
+      !ticketType ||
+      !Array.isArray(selectedSeats)
     ) {
       return res.status(400).json({
         success: false,
@@ -228,7 +360,7 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // Prevent duplicate bookings if the verification request is repeated.
+    // 5. Prevent duplicate bookings
     const existingBooking = await Booking.findOne({
       $or: [
         { razorpayPaymentId: razorpay_payment_id },
@@ -260,6 +392,7 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
+    // 6. Find event
     const eventData = await Event.findOne({
       _id: eventId,
       isActive: true,
@@ -272,6 +405,7 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
+    // 7. Validate payment amount
     const expectedAmount = Math.round(
       eventData.ticketPrice * quantity * 100
     );
@@ -286,31 +420,169 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // Atomically reserve seats so concurrent requests cannot oversell.
-    const reservedEvent = await Event.findOneAndUpdate(
-      {
-        _id: eventId,
-        isActive: true,
-        availableSeats: { $gte: quantity },
-      },
-      {
-        $inc: { availableSeats: -quantity },
-      },
-      { new: true }
-    );
+    // 8. Handle reserved seating
+    if (eventData.seatingType === "reserved") {
+      if (
+        selectedSeats.length !== quantity ||
+        new Set(selectedSeats).size !== quantity ||
+        selectedSeats.some(
+          (seat) => typeof seat !== "string" || !seat.trim()
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid selected seats.",
+        });
+      }
 
-    if (!reservedEvent) {
-      return res.status(409).json({
+      // Confirm seats are reserved for this Razorpay order.
+      // Change reserved seats to booked.
+      const bookedEvent = await Event.findOneAndUpdate(
+        {
+          _id: eventId,
+          isActive: true,
+          seatingType: "reserved",
+          $expr: {
+            $eq: [
+              {
+                $size: {
+                  $filter: {
+                    input: "$seats",
+                    as: "seat",
+                    cond: {
+                      $and: [
+                        {
+                          $in: [
+                            "$$seat.seatNumber",
+                            selectedSeats,
+                          ],
+                        },
+                        {
+                          $eq: [
+                            "$$seat.status",
+                            "reserved",
+                          ],
+                        },
+                        {
+                          $eq: [
+                            "$$seat.reservationOrderId",
+                            razorpay_order_id,
+                          ],
+                        },
+                        {
+                          $gt: [
+                            "$$seat.reservedUntil",
+                            new Date(),
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+              quantity,
+            ],
+          },
+        },
+        [
+          {
+            $set: {
+              seats: {
+                $map: {
+                  input: "$seats",
+                  as: "seat",
+                  in: {
+                    $cond: [
+                      {
+                        $in: [
+                          "$$seat.seatNumber",
+                          selectedSeats,
+                        ],
+                      },
+                      {
+                        $mergeObjects: [
+                          "$$seat",
+                          {
+                            status: "booked",
+                            reservationOrderId: null,
+                            reservedUntil: null,
+                          },
+                        ],
+                      },
+                      "$$seat",
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        ],
+        {
+          returnDocument: "after",
+          updatePipeline: true,
+        }
+      );
+
+      if (!bookedEvent) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Your seat reservation has expired or is no longer available. Your payment needs to be checked by support.",
+        });
+      }
+
+      reservedEventId = eventId;
+      reservedQuantity = quantity;
+      reservedSeatNumbers = selectedSeats;
+      reservedOrderId = razorpay_order_id;
+      isReservedSeating = true;
+
+    } else if (eventData.seatingType === "general") {
+
+      if (selectedSeats.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid seat details for general admission.",
+        });
+      }
+
+      // General admission: decrease available seats after payment.
+      const updatedEvent = await Event.findOneAndUpdate(
+        {
+          _id: eventId,
+          isActive: true,
+          seatingType: "general",
+          availableSeats: { $gte: quantity },
+        },
+        {
+          $inc: { availableSeats: -quantity },
+        },
+        {
+          returnDocument: "after",
+        }
+      );
+
+      if (!updatedEvent) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Not enough seats are available. Contact support about your payment.",
+        });
+      }
+
+      reservedEventId = eventId;
+      reservedQuantity = quantity;
+
+    } else {
+      return res.status(400).json({
         success: false,
-        message:
-          "Not enough seats are available. Contact support about your payment.",
+        message: "Invalid event seating type.",
       });
     }
 
-    reservedEventId = eventId;
-    reservedQuantity = quantity;
-
+    // 9. Generate ticket details
     const ticketToken = crypto.randomBytes(24).toString("hex");
+
     const bookingId = `BK${Date.now()}${crypto
       .randomBytes(3)
       .toString("hex")}`;
@@ -323,6 +595,7 @@ const verifyRazorpayPayment = async (req, res) => {
 
     const qrCode = await QRCode.toDataURL(verificationUrl);
 
+    // 10. Create booking
     const booking = await Booking.create({
       bookingId,
       ticketToken,
@@ -331,6 +604,7 @@ const verifyRazorpayPayment = async (req, res) => {
       event: eventId,
       ticketType,
       quantity,
+      selectedSeats,
       totalPrice: expectedAmount / 100,
       status: "confirmed",
       paymentStatus: "paid",
@@ -340,6 +614,7 @@ const verifyRazorpayPayment = async (req, res) => {
 
     bookingCreated = true;
 
+    // 11. Return booking confirmation
     return res.status(201).json({
       success: true,
       message: "Payment verified and booking confirmed successfully.",
@@ -347,29 +622,56 @@ const verifyRazorpayPayment = async (req, res) => {
         bookingId: booking.bookingId,
         ticketToken: booking.ticketToken,
         quantity: booking.quantity,
+        selectedSeats: booking.selectedSeats,
         totalPrice: booking.totalPrice,
         status: booking.status,
         paymentStatus: booking.paymentStatus,
         qrCode,
       },
     });
+
   } catch (error) {
-    // Restore reserved seats if creating the booking failed.
+
+    // 12. Roll back if booking creation fails
     if (reservedEventId && reservedQuantity > 0 && !bookingCreated) {
       try {
-        await Event.updateOne(
-          { _id: reservedEventId },
-          { $inc: { availableSeats: reservedQuantity } }
-        );
+        if (isReservedSeating) {
+          await Event.updateOne(
+            {
+              _id: reservedEventId,
+              "seats.seatNumber": { $in: reservedSeatNumbers },
+            },
+            {
+              $set: {
+                "seats.$[seat].status": "reserved",
+                "seats.$[seat].reservationOrderId": reservedOrderId,
+              },
+            },
+            {
+              arrayFilters: [
+                {
+                  "seat.seatNumber": { $in: reservedSeatNumbers },
+                  "seat.status": "booked",
+                },
+              ],
+            }
+          );
+
+        } else {
+          await Event.updateOne(
+            { _id: reservedEventId },
+            { $inc: { availableSeats: reservedQuantity } }
+          );
+        }
+
       } catch (rollbackError) {
         console.error(
-          "Failed to restore reserved seats:",
+          "Failed to restore seats:",
           rollbackError.message
         );
       }
     }
 
-    // A duplicate payment ID can occur if two verification requests race.
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
@@ -378,7 +680,7 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    console.error("Payment verification error:", error.message);
+    console.error("Payment verification error:", error);
 
     return res.status(500).json({
       success: false,
@@ -388,7 +690,74 @@ const verifyRazorpayPayment = async (req, res) => {
   }
 };
 
+const releaseExpiredReservations = async () => {
+  const now = new Date();
+
+  const events = await Event.find({
+    seatingType: "reserved",
+    seats: {
+      $elemMatch: {
+        status: "reserved",
+        reservedUntil: { $lte: now },
+      },
+    },
+  });
+
+  let releasedCount = 0;
+
+  for (const event of events) {
+    const expiredSeats = event.seats.filter(
+      (seat) =>
+        seat.status === "reserved" &&
+        seat.reservedUntil &&
+        seat.reservedUntil <= now
+    );
+
+    if (expiredSeats.length === 0) continue;
+
+    const expiredSeatNumbers = expiredSeats.map(
+      (seat) => seat.seatNumber
+    );
+
+    const result = await Event.updateOne(
+      {
+        _id: event._id,
+      },
+      {
+        $set: {
+          "seats.$[seat].status": "available",
+          "seats.$[seat].reservationOrderId": null,
+          "seats.$[seat].reservedUntil": null,
+        },
+        $inc: {
+          availableSeats: expiredSeatNumbers.length,
+        },
+      },
+      {
+        arrayFilters: [
+          {
+            "seat.seatNumber": { $in: expiredSeatNumbers },
+            "seat.status": "reserved",
+            "seat.reservedUntil": { $lte: now },
+          },
+        ],
+      }
+    );
+
+    if (result.modifiedCount > 0) {
+      releasedCount += expiredSeatNumbers.length;
+    }
+  }
+
+  if (releasedCount > 0) {
+    console.log(`${releasedCount} expired seats released.`);
+  }
+
+  return releasedCount;
+};
+
 module.exports = {
   createRazorpayOrder,
   verifyRazorpayPayment,
+  releaseExpiredReservations
 };

@@ -18,6 +18,7 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const favoriteRoutes = require("./routes/favoriteRoutes");
 const messageRoutes = require("./routes/messageRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
+const { releaseExpiredReservations } = require("./controllers/razorpayController");
 
 const app = express();
 const server = http.createServer(app);
@@ -54,7 +55,6 @@ io.use((socket, next) => {
 try {
 const token = socket.handshake.auth.token;
 
-```
 if (!token) {
   return next(new Error("Authentication required"));
 }
@@ -67,7 +67,6 @@ socket.user = {
 };
 
 next();
-```
 
 } catch (error) {
 next(new Error("Invalid or expired token"));
@@ -135,11 +134,29 @@ app.use("/api/messages", messageRoutes);
 // Review routes.
 app.use("/api/reviews", reviewRoutes);
 
-// Connect MongoDB.
-connectDB();
 
-const PORT = process.env.PORT || 5000;
+// Connect MongoDB and start the server
+connectDB()
+  .then(() => {
+    const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
-console.log(`Server running on port ${PORT}`);
-});
+    server.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+
+    // Automatically release expired reservations every minute
+    setInterval(async () => {
+      try {
+        await releaseExpiredReservations();
+      } catch (error) {
+        console.error(
+          "Automatic seat cleanup failed:",
+          error.message
+        );
+      }
+    }, 60 * 1000);
+  })
+  .catch((error) => {
+    console.error("Database connection failed:", error);
+    process.exit(1);
+  });
