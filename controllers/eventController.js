@@ -23,7 +23,7 @@ const createEvent = async (req, res) => {
       venue,
       location,
       description,
-      ticketPrices,
+      ticketPrice,
       totalSeats,
       seatingType = "general",
       seats,
@@ -40,7 +40,8 @@ const createEvent = async (req, res) => {
       !venue ||
       !location ||
       !description ||
-      ticketPrices === undefined ||
+      ticketPrice === undefined ||
+      ticketPrice === "" ||
       totalSeats === undefined
     ) {
       return res.status(400).json({
@@ -48,51 +49,25 @@ const createEvent = async (req, res) => {
       });
     }
 
-    // 2. Parse ticket prices
-    let prices;
-
-    try {
-      prices =
-        typeof ticketPrices === "string"
-          ? JSON.parse(ticketPrices)
-          : ticketPrices;
-    } catch (error) {
-      return res.status(400).json({
-        message: "Invalid ticket prices data",
-      });
-    }
+    // 2. Validate ticket price
+    const price = Number(ticketPrice);
 
     if (
-      !prices ||
-      typeof prices !== "object" ||
-      Array.isArray(prices)
+      !Number.isFinite(price) ||
+      price < 0
     ) {
       return res.status(400).json({
-        message: "Invalid ticket prices",
+        message: "Please enter a valid ticket price",
       });
     }
 
-    const generalPrice = Number(prices.general);
-    const vipPrice = Number(prices.vip);
-    const premiumPrice = Number(prices.premium);
-
-    // 3. Validate individual ticket prices
-    if (
-      !Number.isFinite(generalPrice) ||
-      generalPrice < 0 ||
-      !Number.isFinite(vipPrice) ||
-      vipPrice < 0 ||
-      !Number.isFinite(premiumPrice) ||
-      premiumPrice < 0
-    ) {
-      return res.status(400).json({
-        message: "Please enter valid prices for all ticket types",
-      });
-    }
-
+    // 3. Validate total seats
     const seatCount = Number(totalSeats);
 
-    if (!Number.isInteger(seatCount) || seatCount < 1) {
+    if (
+      !Number.isInteger(seatCount) ||
+      seatCount < 1
+    ) {
       return res.status(400).json({
         message: "Invalid total seats",
       });
@@ -125,7 +100,8 @@ const createEvent = async (req, res) => {
         eventSeats.length !== seatCount
       ) {
         return res.status(400).json({
-          message: "The number of seats must match total seats",
+          message:
+            "The number of seats must match total seats",
         });
       }
 
@@ -140,7 +116,8 @@ const createEvent = async (req, res) => {
         new Set(seatNumbers).size !== seatNumbers.length
       ) {
         return res.status(400).json({
-          message: "Seat numbers must be valid and unique",
+          message:
+            "Seat numbers must be valid and unique",
         });
       }
 
@@ -160,11 +137,8 @@ const createEvent = async (req, res) => {
       location,
       description,
 
-      ticketPrices: {
-        general: generalPrice,
-        vip: vipPrice,
-        premium: premiumPrice,
-      },
+      // Single ticket price
+      ticketPrice: price,
 
       totalSeats: seatCount,
       availableSeats: seatCount,
@@ -174,6 +148,7 @@ const createEvent = async (req, res) => {
       organizer: req.user.user_id,
     });
 
+    // 7. Send response
     return res.status(201).json({
       status: true,
       message: "Event created successfully",

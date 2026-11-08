@@ -1,46 +1,14 @@
 const razorpay = require("../config/razorpay");
 const crypto = require("crypto");
+
 const Event = require("../models/event");
 const Booking = require("../models/booking");
+
 const QRCode = require("qrcode");
 
-// Allowed ticket types
-const ALLOWED_TICKET_TYPES = ["general", "vip", "premium"];
+// Reservation duration: 10 minutes
+const RESERVATION_DURATION = 10 * 60 * 1000;
 
-// Get ticket price from event
-const getTicketPrice = (eventData, ticketType) => {
-  const normalizedTicketType = String(ticketType || "")
-    .trim()
-    .toLowerCase();
-
-  if (!ALLOWED_TICKET_TYPES.includes(normalizedTicketType)) {
-    return {
-      valid: false,
-      ticketType: normalizedTicketType,
-      price: null,
-    };
-  }
-
-  const price = eventData.ticketPrices?.[normalizedTicketType];
-
-  if (
-    typeof price !== "number" ||
-    !Number.isFinite(price) ||
-    price <= 0
-  ) {
-    return {
-      valid: false,
-      ticketType: normalizedTicketType,
-      price: null,
-    };
-  }
-
-  return {
-    valid: true,
-    ticketType: normalizedTicketType,
-    price,
-  };
-};
 
 // =====================================================
 // CREATE RAZORPAY ORDER
@@ -51,25 +19,24 @@ const createRazorpayOrder = async (req, res) => {
     const {
       eventId,
       quantity,
-      ticketType,
       selectedSeats = [],
     } = req.body;
 
-    // Validate basic booking details
+    // 1. Validate booking details
+
     if (
       !eventId ||
-      !ticketType ||
       !Number.isInteger(quantity) ||
       quantity <= 0
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Event, ticket type and a valid quantity are required.",
+        message: "Event and a valid quantity are required.",
       });
     }
 
-    // Find event
+    // 2. Find event
+
     const eventData = await Event.findOne({
       _id: eventId,
       isActive: true,
@@ -82,23 +49,25 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
-    // Get correct ticket price
-    const ticketDetails = getTicketPrice(
-      eventData,
-      ticketType
-    );
+    // 3. Validate ticket price
 
-    if (!ticketDetails.valid) {
+    const eventPrice = Number(eventData.ticketPrice);
+
+    if (
+      eventData.ticketPrice === undefined ||
+      eventData.ticketPrice === null ||
+      eventData.ticketPrice === "" ||
+      !Number.isFinite(eventPrice) ||
+      eventPrice <= 0
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Invalid event price or ticket type.",
+        message: "Invalid event ticket price.",
       });
     }
 
-    const normalizedTicketType = ticketDetails.ticketType;
-    const eventPrice = ticketDetails.price;
+    // 4. Validate selected seats
 
-    // Validate seating type and selected seats
     if (eventData.seatingType === "reserved") {
       if (
         !Array.isArray(selectedSeats) ||
@@ -106,13 +75,13 @@ const createRazorpayOrder = async (req, res) => {
         new Set(selectedSeats).size !== quantity ||
         selectedSeats.some(
           (seat) =>
-            typeof seat !== "string" || !seat.trim()
+            typeof seat !== "string" ||
+            !seat.trim()
         )
       ) {
         return res.status(400).json({
           success: false,
-          message:
-            "Please select a valid number of unique seats.",
+          message: "Please select a valid number of unique seats.",
         });
       }
     } else if (eventData.seatingType === "general") {
@@ -122,8 +91,7 @@ const createRazorpayOrder = async (req, res) => {
       ) {
         return res.status(400).json({
           success: false,
-          message:
-            "Seat selection is not available for this event.",
+          message: "Seat selection is not available for this event.",
         });
       }
     } else {
@@ -133,34 +101,61 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
-    // Check available seats
-    if (eventData.availableSeats < quantity) {
+    // 5. Check available seats
+
+    const availableSeats = Number(eventData.availableSeats);
+
+    if (
+      !Number.isFinite(availableSeats) ||
+      availableSeats < quantity
+    ) {
       return res.status(400).json({
         success: false,
         message: "Not enough seats are available.",
       });
     }
 
-    // Validate event date and time
-    const eventDateTime = new Date(
-      `${new Date(eventData.date)
-        .toISOString()
-        .split("T")[0]}T${eventData.time}`
-    );
+    // 6. Validate event date and time
+
+    const eventDate = new Date(eventData.date);
+
+    const [hours, minutes] = eventData.time
+      .split(":")
+      .map(Number);
 
     if (
-      Number.isNaN(eventDateTime.getTime()) ||
-      eventDateTime < new Date()
+      Number.isNaN(eventDate.getTime()) ||
+      !Number.isInteger(hours) ||
+      !Number.isInteger(minutes) ||
+      hours < 0 ||
+      hours > 23 ||
+      minutes < 0 ||
+      minutes > 59
     ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid event date or time.",
+      });
+    }
+
+    const eventDateTime = new Date(eventDate);
+
+    eventDateTime.setHours(hours, minutes, 0, 0);
+
+    if (eventDateTime < new Date()) {
       return res.status(400).json({
         success: false,
         message: "This event cannot be booked.",
       });
     }
 
-    // Calculate payment amount
+    // 7. Calculate payment amount
+
     const totalPrice = eventPrice * quantity;
-    const amountInPaise = Math.round(totalPrice * 100);
+
+    const amountInPaise = Math.round(
+      totalPrice * 100
+    );
 
     if (
       !Number.isSafeInteger(amountInPaise) ||
@@ -172,7 +167,8 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
-    // Create Razorpay order
+    // 8. Create Razorpay order
+
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: "INR",
@@ -181,24 +177,31 @@ const createRazorpayOrder = async (req, res) => {
       notes: {
         eventId: String(eventData._id),
         quantity: String(quantity),
-        ticketType: normalizedTicketType,
         userId: String(req.user.user_id),
         selectedSeats: JSON.stringify(selectedSeats),
       },
     });
 
-    // Reserve selected seats for 10 minutes
-    if (eventData.seatingType === "reserved") {
-      const reservedUntil = new Date(
-        Date.now() + 10 * 60 * 1000
-      );
+    // 9. Reserve seats for 10 minutes
 
+    const reservedUntil = new Date(
+      Date.now() + RESERVATION_DURATION
+    );
+
+    // =================================================
+    // RESERVED SEATING
+    // =================================================
+
+    if (eventData.seatingType === "reserved") {
       const reservedEvent = await Event.findOneAndUpdate(
         {
           _id: eventId,
           isActive: true,
           seatingType: "reserved",
-          availableSeats: { $gte: quantity },
+
+          availableSeats: {
+            $gte: quantity,
+          },
 
           $expr: {
             $eq: [
@@ -207,6 +210,7 @@ const createRazorpayOrder = async (req, res) => {
                   $filter: {
                     input: "$seats",
                     as: "seat",
+
                     cond: {
                       $and: [
                         {
@@ -215,6 +219,7 @@ const createRazorpayOrder = async (req, res) => {
                             selectedSeats,
                           ],
                         },
+
                         {
                           $eq: [
                             "$$seat.status",
@@ -226,6 +231,7 @@ const createRazorpayOrder = async (req, res) => {
                   },
                 },
               },
+
               quantity,
             ],
           },
@@ -251,10 +257,11 @@ const createRazorpayOrder = async (req, res) => {
                       {
                         $mergeObjects: [
                           "$$seat",
+
                           {
                             status: "reserved",
                             reservationOrderId: order.id,
-                            reservedUntil: reservedUntil,
+                            reservedUntil,
                           },
                         ],
                       },
@@ -276,12 +283,22 @@ const createRazorpayOrder = async (req, res) => {
         ],
 
         {
-          returnDocument: "after",
-          updatePipeline: true,
+
+  returnDocument: "after",
+  updatePipeline: true,
         }
       );
 
       if (!reservedEvent) {
+        console.log(
+          "Reserved seating failed:",
+          {
+            eventId,
+            quantity,
+            selectedSeats,
+          }
+        );
+
         return res.status(409).json({
           success: false,
           message:
@@ -289,6 +306,170 @@ const createRazorpayOrder = async (req, res) => {
         });
       }
     }
+
+    // =================================================
+    // GENERAL ADMISSION
+    // =================================================
+
+    else if (eventData.seatingType === "general") {
+
+      // Fetch latest event information for debugging
+
+      const debugEvent = await Event.findById(
+        eventId
+      ).lean();
+
+      console.log(
+        "========== GENERAL RESERVATION DEBUG =========="
+      );
+
+      console.log("Event ID:", eventId);
+
+      console.log(
+        "Event found:",
+        !!debugEvent
+      );
+
+      console.log(
+        "Event name:",
+        debugEvent?.eventName
+      );
+
+      console.log(
+        "Seating type:",
+        debugEvent?.seatingType
+      );
+
+      console.log(
+        "Is active:",
+        debugEvent?.isActive
+      );
+
+      console.log(
+        "Available seats:",
+        debugEvent?.availableSeats
+      );
+
+      console.log(
+        "Available seats type:",
+        typeof debugEvent?.availableSeats
+      );
+
+      console.log(
+        "Requested quantity:",
+        quantity
+      );
+
+      console.log(
+        "General reservations:",
+        debugEvent?.generalReservations
+      );
+
+      console.log(
+        "================================================"
+      );
+
+      // Check latest event data
+
+      if (!debugEvent) {
+        return res.status(404).json({
+          success: false,
+          message: "Event not found.",
+        });
+      }
+
+      if (debugEvent.isActive !== true) {
+        return res.status(400).json({
+          success: false,
+          message: "This event is currently unavailable.",
+        });
+      }
+
+      if (debugEvent.seatingType !== "general") {
+        return res.status(400).json({
+          success: false,
+          message: "This event does not support general admission.",
+        });
+      }
+
+      const latestAvailableSeats = Number(
+        debugEvent.availableSeats
+      );
+
+      if (
+        !Number.isFinite(latestAvailableSeats) ||
+        latestAvailableSeats < quantity
+      ) {
+        return res.status(409).json({
+          success: false,
+          message: `Only ${Number.isFinite(latestAvailableSeats) ? latestAvailableSeats : 0} seats are available.`,
+        });
+      }
+
+      // Atomically reserve general admission seats
+
+      const reservedEvent = await Event.findOneAndUpdate(
+        {
+          _id: eventId,
+          isActive: true,
+          seatingType: "general",
+
+          availableSeats: {
+            $gte: quantity,
+          },
+        },
+
+        {
+          $inc: {
+            availableSeats: -quantity,
+          },
+
+          $push: {
+            generalReservations: {
+              orderId: order.id,
+              quantity,
+              reservedUntil,
+            },
+          },
+        },
+
+        {
+          returnDocument: "after",
+          runValidators: true,
+        }
+      );
+
+      if (!reservedEvent) {
+        console.log(
+          "GENERAL ADMISSION ATOMIC UPDATE FAILED"
+        );
+
+        console.log({
+          eventId,
+          quantity,
+          seatingType: debugEvent.seatingType,
+          isActive: debugEvent.isActive,
+          availableSeats: debugEvent.availableSeats,
+        });
+
+        return res.status(409).json({
+          success: false,
+          message:
+            "The event availability changed while processing your booking. Please refresh and try again.",
+        });
+      }
+
+      console.log(
+        "GENERAL ADMISSION RESERVED SUCCESSFULLY"
+      );
+
+      console.log(
+        "Remaining seats:",
+        reservedEvent.availableSeats
+      );
+    }
+
+    // 10. Return successful response
 
     return res.status(201).json({
       success: true,
@@ -323,8 +504,9 @@ const createRazorpayOrder = async (req, res) => {
 const verifyRazorpayPayment = async (req, res) => {
   let reservedEventId = null;
   let reservedQuantity = 0;
+
   let reservedSeatNumbers = [];
-  let reservedOrderId = null;
+
   let isReservedSeating = false;
   let bookingCreated = false;
 
@@ -336,6 +518,7 @@ const verifyRazorpayPayment = async (req, res) => {
     } = req.body;
 
     // 1. Validate payment details
+
     if (
       !razorpay_order_id ||
       !razorpay_payment_id ||
@@ -343,8 +526,7 @@ const verifyRazorpayPayment = async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Missing payment verification details.",
+        message: "Missing payment verification details.",
       });
     }
 
@@ -356,12 +538,12 @@ const verifyRazorpayPayment = async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Invalid payment verification details.",
+        message: "Invalid payment verification details.",
       });
     }
 
     // 2. Verify Razorpay signature
+
     const expectedSignature = crypto
       .createHmac(
         "sha256",
@@ -396,7 +578,8 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // 3. Fetch actual order and payment from Razorpay
+    // 3. Fetch actual order and payment
+
     const [order, payment] = await Promise.all([
       razorpay.orders.fetch(razorpay_order_id),
       razorpay.payments.fetch(razorpay_payment_id),
@@ -408,16 +591,14 @@ const verifyRazorpayPayment = async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Payment does not match the order.",
+        message: "Payment does not match the order.",
       });
     }
 
     if (payment.status !== "captured") {
       return res.status(400).json({
         success: false,
-        message:
-          "Payment is not captured yet.",
+        message: "Payment is not captured yet.",
       });
     }
 
@@ -429,12 +610,12 @@ const verifyRazorpayPayment = async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Payment amount or currency does not match.",
+        message: "Payment amount or currency does not match.",
       });
     }
 
     // 4. Check order ownership
+
     const notes = order.notes || {};
 
     if (
@@ -448,8 +629,8 @@ const verifyRazorpayPayment = async (req, res) => {
     }
 
     const eventId = notes.eventId;
+
     const quantity = Number(notes.quantity);
-    const ticketType = notes.ticketType;
 
     let selectedSeats = [];
 
@@ -460,8 +641,7 @@ const verifyRazorpayPayment = async (req, res) => {
     } catch {
       return res.status(400).json({
         success: false,
-        message:
-          "Invalid selected seat details.",
+        message: "Invalid selected seat details.",
       });
     }
 
@@ -469,7 +649,6 @@ const verifyRazorpayPayment = async (req, res) => {
       !eventId ||
       !Number.isInteger(quantity) ||
       quantity <= 0 ||
-      !ticketType ||
       !Array.isArray(selectedSeats)
     ) {
       return res.status(400).json({
@@ -480,6 +659,7 @@ const verifyRazorpayPayment = async (req, res) => {
     }
 
     // 5. Prevent duplicate bookings
+
     const existingBooking = await Booking.findOne({
       $or: [
         {
@@ -506,21 +686,33 @@ const verifyRazorpayPayment = async (req, res) => {
         });
       }
 
+      const existingFrontendUrl =
+        process.env.FRONTEND_URL ||
+        "http://localhost:3000";
+
+      const existingQrCode = await QRCode.toDataURL(
+        `${existingFrontendUrl}/organizer/verify-ticket?token=${existingBooking.ticketToken}`
+      );
+
       return res.status(200).json({
         success: true,
         message: "Booking already confirmed.",
 
         data: {
           bookingId: existingBooking.bookingId,
-          status: existingBooking.status,
-          paymentStatus:
-            existingBooking.paymentStatus,
           ticketToken: existingBooking.ticketToken,
+          quantity: existingBooking.quantity,
+          selectedSeats: existingBooking.selectedSeats,
+          totalPrice: existingBooking.totalPrice,
+          status: existingBooking.status,
+          paymentStatus: existingBooking.paymentStatus,
+          qrCode: existingQrCode,
         },
       });
     }
 
     // 6. Find event
+
     const eventData = await Event.findOne({
       _id: eventId,
       isActive: true,
@@ -529,31 +721,31 @@ const verifyRazorpayPayment = async (req, res) => {
     if (!eventData) {
       return res.status(400).json({
         success: false,
-        message:
-          "The event is no longer available.",
+        message: "The event is no longer available.",
       });
     }
 
-    // 7. Get correct ticket price
-    const ticketDetails = getTicketPrice(
-      eventData,
-      ticketType
-    );
+    // 7. Validate ticket price
 
-    if (!ticketDetails.valid) {
+    const eventPrice = Number(eventData.ticketPrice);
+
+    if (
+      eventData.ticketPrice === undefined ||
+      eventData.ticketPrice === null ||
+      eventData.ticketPrice === "" ||
+      !Number.isFinite(eventPrice) ||
+      eventPrice <= 0
+    ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Invalid event price or ticket type.",
+        message: "Invalid event ticket price.",
       });
     }
 
-    const normalizedTicketType =
-      ticketDetails.ticketType;
-
-    const eventPrice = ticketDetails.price;
+    const normalizedTicketType = "general";
 
     // 8. Validate payment amount
+
     const expectedAmount = Math.round(
       eventPrice * quantity * 100
     );
@@ -569,14 +761,16 @@ const verifyRazorpayPayment = async (req, res) => {
       });
     }
 
-    // 9. Handle reserved seating
+    // 9. Confirm reserved seating
+
     if (eventData.seatingType === "reserved") {
       if (
         selectedSeats.length !== quantity ||
         new Set(selectedSeats).size !== quantity ||
         selectedSeats.some(
           (seat) =>
-            typeof seat !== "string" || !seat.trim()
+            typeof seat !== "string" ||
+            !seat.trim()
         )
       ) {
         return res.status(400).json({
@@ -585,7 +779,6 @@ const verifyRazorpayPayment = async (req, res) => {
         });
       }
 
-      // Confirm seats are reserved for this order
       const bookedEvent = await Event.findOneAndUpdate(
         {
           _id: eventId,
@@ -657,6 +850,7 @@ const verifyRazorpayPayment = async (req, res) => {
                       {
                         $mergeObjects: [
                           "$$seat",
+
                           {
                             status: "booked",
                             reservationOrderId: null,
@@ -674,10 +868,10 @@ const verifyRazorpayPayment = async (req, res) => {
           },
         ],
 
-        {
-          returnDocument: "after",
-          updatePipeline: true,
-        }
+{
+  returnDocument: "after",
+  updatePipeline: true,
+}
       );
 
       if (!bookedEvent) {
@@ -690,12 +884,14 @@ const verifyRazorpayPayment = async (req, res) => {
 
       reservedEventId = eventId;
       reservedQuantity = quantity;
+
       reservedSeatNumbers = selectedSeats;
-      reservedOrderId = razorpay_order_id;
       isReservedSeating = true;
+    }
 
-    } else if (eventData.seatingType === "general") {
+    // 10. Confirm general admission
 
+    else if (eventData.seatingType === "general") {
       if (selectedSeats.length > 0) {
         return res.status(400).json({
           success: false,
@@ -704,18 +900,29 @@ const verifyRazorpayPayment = async (req, res) => {
         });
       }
 
-      // Decrease available seats after payment
-      const updatedEvent = await Event.findOneAndUpdate(
+      const confirmedReservation = await Event.findOneAndUpdate(
         {
           _id: eventId,
           isActive: true,
           seatingType: "general",
-          availableSeats: { $gte: quantity },
+
+          generalReservations: {
+            $elemMatch: {
+              orderId: razorpay_order_id,
+              quantity: quantity,
+
+              reservedUntil: {
+                $gt: new Date(),
+              },
+            },
+          },
         },
 
         {
-          $inc: {
-            availableSeats: -quantity,
+          $pull: {
+            generalReservations: {
+              orderId: razorpay_order_id,
+            },
           },
         },
 
@@ -724,32 +931,33 @@ const verifyRazorpayPayment = async (req, res) => {
         }
       );
 
-      if (!updatedEvent) {
+      if (!confirmedReservation) {
         return res.status(409).json({
           success: false,
           message:
-            "Not enough seats are available. Contact support about your payment.",
+            "Your seat reservation has expired or is no longer available. Your payment needs to be checked by support.",
         });
       }
 
       reservedEventId = eventId;
       reservedQuantity = quantity;
+    }
 
-    } else {
+    else {
       return res.status(400).json({
         success: false,
         message: "Invalid event seating type.",
       });
     }
 
-    // 10. Generate ticket details
+    // 11. Generate ticket details
+
     const ticketToken = crypto
       .randomBytes(24)
       .toString("hex");
 
-    const bookingId = `BK${Date.now()}${crypto
-      .randomBytes(3)
-      .toString("hex")}`;
+    const bookingId =
+      `BK${Date.now()}${crypto.randomBytes(3).toString("hex")}`;
 
     const frontendUrl =
       process.env.FRONTEND_URL ||
@@ -762,33 +970,31 @@ const verifyRazorpayPayment = async (req, res) => {
       verificationUrl
     );
 
-    // 11. Create booking
+    // 12. Create booking
+
     const booking = await Booking.create({
       bookingId,
       ticketToken,
       checkedIn: false,
-
       user: req.user.user_id,
       event: eventId,
-
       ticketType: normalizedTicketType,
       quantity,
       selectedSeats,
-
       totalPrice: expectedAmount / 100,
-
       status: "confirmed",
       paymentStatus: "paid",
-
       razorpayOrderId: razorpay_order_id,
       razorpayPaymentId: razorpay_payment_id,
     });
 
     bookingCreated = true;
 
-    // 12. Return booking confirmation
+    // 13. Return booking confirmation
+
     return res.status(201).json({
       success: true,
+
       message:
         "Payment verified and booking confirmed successfully.",
 
@@ -806,7 +1012,8 @@ const verifyRazorpayPayment = async (req, res) => {
 
   } catch (error) {
 
-    // 13. Roll back seats if booking creation fails
+    // 14. Roll back seats if booking creation fails
+
     if (
       reservedEventId &&
       reservedQuantity > 0 &&
@@ -814,8 +1021,6 @@ const verifyRazorpayPayment = async (req, res) => {
     ) {
       try {
         if (isReservedSeating) {
-
-          // Release reserved seats and restore availability
           await Event.updateOne(
             {
               _id: reservedEventId,
@@ -845,10 +1050,7 @@ const verifyRazorpayPayment = async (req, res) => {
               ],
             }
           );
-
         } else {
-
-          // Restore general admission seats
           await Event.updateOne(
             {
               _id: reservedEventId,
@@ -861,7 +1063,6 @@ const verifyRazorpayPayment = async (req, res) => {
             }
           );
         }
-
       } catch (rollbackError) {
         console.error(
           "Failed to restore seats:",
@@ -893,85 +1094,231 @@ const verifyRazorpayPayment = async (req, res) => {
 
 
 // =====================================================
-// RELEASE EXPIRED SEAT RESERVATIONS
+// RELEASE EXPIRED RESERVATIONS
 // =====================================================
 
 const releaseExpiredReservations = async () => {
   const now = new Date();
 
-  const events = await Event.find({
+  let releasedCount = 0;
+
+  // 1. RELEASE EXPIRED RESERVED SEATS
+
+  const reservedEvents = await Event.find({
     seatingType: "reserved",
 
     seats: {
       $elemMatch: {
         status: "reserved",
+
         reservedUntil: {
           $lte: now,
         },
       },
     },
-  });
+  }).select("_id");
 
-  let releasedCount = 0;
-
-  for (const event of events) {
-    const expiredSeats = event.seats.filter(
-      (seat) =>
-        seat.status === "reserved" &&
-        seat.reservedUntil &&
-        seat.reservedUntil <= now
-    );
-
-    if (expiredSeats.length === 0) {
-      continue;
-    }
-
-    const expiredSeatNumbers = expiredSeats.map(
-      (seat) => seat.seatNumber
-    );
-
-    const result = await Event.updateOne(
+  for (const event of reservedEvents) {
+    const result = await Event.findOneAndUpdate(
       {
         _id: event._id,
-      },
 
-      {
-        $set: {
-          "seats.$[seat].status": "available",
-          "seats.$[seat].reservationOrderId": null,
-          "seats.$[seat].reservedUntil": null,
-        },
+        seats: {
+          $elemMatch: {
+            status: "reserved",
 
-        $inc: {
-          availableSeats: expiredSeatNumbers.length,
-        },
-      },
-
-      {
-        arrayFilters: [
-          {
-            "seat.seatNumber": {
-              $in: expiredSeatNumbers,
-            },
-
-            "seat.status": "reserved",
-
-            "seat.reservedUntil": {
+            reservedUntil: {
               $lte: now,
             },
           },
-        ],
-      }
+        },
+      },
+
+      [
+        {
+          $set: {
+            availableSeats: {
+              $add: [
+                "$availableSeats",
+
+                {
+                  $size: {
+                    $filter: {
+                      input: "$seats",
+                      as: "seat",
+
+                      cond: {
+                        $and: [
+                          {
+                            $eq: [
+                              "$$seat.status",
+                              "reserved",
+                            ],
+                          },
+
+                          {
+                            $lte: [
+                              "$$seat.reservedUntil",
+                              now,
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+
+            seats: {
+              $map: {
+                input: "$seats",
+                as: "seat",
+
+                in: {
+                  $cond: [
+                    {
+                      $and: [
+                        {
+                          $eq: [
+                            "$$seat.status",
+                            "reserved",
+                          ],
+                        },
+
+                        {
+                          $lte: [
+                            "$$seat.reservedUntil",
+                            now,
+                          ],
+                        },
+                      ],
+                    },
+
+                    {
+                      $mergeObjects: [
+                        "$$seat",
+
+                        {
+                          status: "available",
+                          reservationOrderId: null,
+                          reservedUntil: null,
+                        },
+                      ],
+                    },
+
+                    "$$seat",
+                  ],
+                },
+              },
+            },
+          },
+        },
+      ],
+
+{
+  returnDocument: "after",
+  updatePipeline: true,
+}
     );
 
-    if (result.modifiedCount > 0) {
-      releasedCount += result.modifiedCount;
+    if (result) {
+      releasedCount += 1;
+    }
+  }
+
+  // 2. RELEASE EXPIRED GENERAL ADMISSION RESERVATIONS
+
+  const generalEvents = await Event.find({
+    seatingType: "general",
+
+    generalReservations: {
+      $elemMatch: {
+        reservedUntil: {
+          $lte: now,
+        },
+      },
+    },
+  }).select("_id");
+
+  for (const event of generalEvents) {
+    const result = await Event.findOneAndUpdate(
+      {
+        _id: event._id,
+
+        generalReservations: {
+          $elemMatch: {
+            reservedUntil: {
+              $lte: now,
+            },
+          },
+        },
+      },
+
+      [
+        {
+          $set: {
+            availableSeats: {
+              $add: [
+                "$availableSeats",
+
+                {
+                  $sum: {
+                    $map: {
+                      input: {
+                        $filter: {
+                          input: "$generalReservations",
+                          as: "reservation",
+
+                          cond: {
+                            $lte: [
+                              "$$reservation.reservedUntil",
+                              now,
+                            ],
+                          },
+                        },
+                      },
+
+                      as: "reservation",
+
+                      in: "$$reservation.quantity",
+                    },
+                  },
+                },
+              ],
+            },
+
+            generalReservations: {
+              $filter: {
+                input: "$generalReservations",
+                as: "reservation",
+
+                cond: {
+                  $gt: [
+                    "$$reservation.reservedUntil",
+                    now,
+                  ],
+                },
+              },
+            },
+          },
+        },
+      ],
+
+{
+  returnDocument: "after",
+  updatePipeline: true,
+}
+    );
+
+    if (result) {
+      releasedCount += 1;
     }
   }
 
   if (releasedCount > 0) {
     console.log(
-      `${releasedCount} expired seats released.`
+      `${releasedCount} expired reservation records released.`
     );
   }
 

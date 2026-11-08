@@ -11,12 +11,20 @@ const Report = require("../models/report");
 const router = express.Router();
 
 router.post(
-    "/create",
-    authMiddleware,
-    roleMiddleware(["organizer"]),
-    upload.single("image"),
-    createEvent
+  "/create",
+  authMiddleware,
+  roleMiddleware(["organizer"]),
+  upload.single("image"),
+  [
+    check("ticketPrice")
+      .notEmpty()
+      .withMessage("Ticket price is required")
+      .isFloat({ min: 0 })
+      .withMessage("Please enter a valid ticket price"),
+  ],
+  createEvent
 );
+
 // Get all events (public)
 router.get("/getevent",authMiddleware,getAllEvents);
 
@@ -85,10 +93,10 @@ router.put(
       .notEmpty()
       .withMessage("Description cannot be empty"),
 
-    check("ticketPrice")
-      .optional()
-      .isNumeric()
-      .withMessage("Ticket price must be numeric"),
+check("ticketPrice")
+  .optional()
+  .isFloat({ min: 0 })
+  .withMessage("Please enter a valid ticket price"),,
 
     check("availableSeats")
       .optional()
