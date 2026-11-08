@@ -458,10 +458,76 @@ return res.status(500).json({
 }
 };
 
+// Get total unread messages for the logged-in organizer
+const getOrganizerUnreadCount = async (req, res) => {
+  try {
+    const organizerId = req.user.user_id;
+
+    if (req.user.role !== "organizer") {
+      return res.status(403).json({
+        success: false,
+        message: "Only organizers can access this information.",
+      });
+    }
+
+    const unreadCount = await Message.countDocuments({
+      receiver: organizerId,
+      isRead: false,
+    });
+
+    return res.status(200).json({
+      success: true,
+      unreadCount,
+    });
+
+  } catch (error) {
+    console.error("Organizer unread message count error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch unread message count.",
+    });
+  }
+};
+
+const getUserUnreadCount = async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+
+    if (req.user.role !== "user") {
+      return res.status(403).json({
+        success: false,
+        message: "Only users can access this information.",
+      });
+    }
+
+    const unreadCount = await Message.countDocuments({
+      receiver: userId,
+      isRead: false,
+    });
+
+    return res.status(200).json({
+      success: true,
+      unreadCount,
+    });
+
+  } catch (error) {
+    console.error("User unread message count error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch unread message count.",
+    });
+  }
+};
+
+
 module.exports = {
 sendMessage,
 getEventMessages,
 getOrganizerConversations,
 getUserConversations,
-markMessagesAsRead
+markMessagesAsRead,
+getOrganizerUnreadCount,
+getUserUnreadCount,
 };

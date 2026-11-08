@@ -11,6 +11,7 @@ const getAdminNotifications = async (req, res) => {
         "organizer",
         "firstName lastName email image verificationStatus"
       )
+      .populate("sender", "firstName lastName role")
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
@@ -29,44 +30,42 @@ const getAdminNotifications = async (req, res) => {
 };
 
 
-
 // Mark an organizer verification notification as read
 const markOrganizerNotificationAsRead = async (req, res) => {
-try {
-const notification = await Notification.findOneAndUpdate(
-{
-_id: req.params.id,
-type: "organizer_verification",
-},
-{ isRead: true },
-{ new: true }
-);
+  try {
+    const notification = await Notification.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        type: "organizer_verification",
+      },
+      { isRead: true },
+      { new: true }
+    );
 
-if (!notification) {
-  return res.status(404).json({
-    status: false,
-    message: "Organizer notification not found",
-  });
-}
+    if (!notification) {
+      return res.status(404).json({
+        status: false,
+        message: "Organizer notification not found",
+      });
+    }
 
-return res.status(200).json({
-  status: true,
-  message: "Notification marked as read",
-  data: notification,
-});
+    return res.status(200).json({
+      status: true,
+      message: "Notification marked as read",
+      data: notification,
+    });
+  } catch (error) {
+    console.error("MARK ORGANIZER NOTIFICATION AS READ ERROR:", error);
 
-} catch (error) {
-console.error("MARK ORGANIZER NOTIFICATION AS READ ERROR:", error);
-
-return res.status(500).json({
-  status: false,
-  message: "Failed to mark notification as read",
-});
-
-}
+    return res.status(500).json({
+      status: false,
+      message: "Failed to mark notification as read",
+    });
+  }
 };
 
-// Get the number of unread organizer verification notifications
+
+// Get unread organizer verification notification count
 const getUnreadOrganizerNotificationCount = async (req, res) => {
   try {
     const count = await Notification.countDocuments({
@@ -92,8 +91,6 @@ const getUnreadOrganizerNotificationCount = async (req, res) => {
 // Approve an organizer
 const approveOrganizer = async (req, res) => {
   try {
-    const User = require("../models/user");
-
     const organizer = await User.findOne({
       _id: req.params.id,
       role: "organizer",
@@ -127,11 +124,10 @@ const approveOrganizer = async (req, res) => {
   }
 };
 
+
 // Reject an organizer
 const rejectOrganizer = async (req, res) => {
   try {
-    const User = require("../models/user");
-
     const organizer = await User.findOne({
       _id: req.params.id,
       role: "organizer",
@@ -171,7 +167,9 @@ const getUserNotifications = async (req, res) => {
   try {
     const notifications = await Notification.find({
       user: req.user.user_id,
-    }).sort({ createdAt: -1 });
+    })
+      .populate("sender", "firstName lastName role")
+      .sort({ createdAt: -1 });
 
     return res.status(200).json({
       status: true,
@@ -188,6 +186,8 @@ const getUserNotifications = async (req, res) => {
   }
 };
 
+
+// Mark user notification as read
 const markNotificationAsRead = async (req, res) => {
   try {
     const notification = await Notification.findOneAndUpdate(
@@ -226,51 +226,32 @@ const markNotificationAsRead = async (req, res) => {
 };
 
 
-// Send an important announcement to all users
+// Send announcement to all users (Admin)
 const sendAnnouncement = async (req, res) => {
   try {
-    const { message } = req.body;
+    const users = await User.find({ role: "user" });
 
-    if (!message || !message.trim()) {
-      return res.status(400).json({
-        status: false,
-        message: "Announcement message is required",
-      });
-    }
-
-    // Find all users
-    const users = await User.find({ role: "user" }).select("_id");
-
-    if (users.length === 0) {
-      return res.status(404).json({
-        status: false,
-        message: "No users found",
-      });
-    }
-
-    // Create an announcement notification for each user
     const notifications = users.map((user) => ({
       user: user._id,
+      sender: req.user.user_id, // Admin ID
       type: "announcement",
-      message: message.trim(),
+      message: req.body.message,
     }));
 
     await Notification.insertMany(notifications);
 
-    return res.status(201).json({
+    res.status(200).json({
       status: true,
       message: "Announcement sent successfully",
-      recipientCount: notifications.length,
     });
   } catch (error) {
-    console.error("SEND ANNOUNCEMENT ERROR:", error);
-
-    return res.status(500).json({
+    res.status(500).json({
       status: false,
-      message: "Failed to send announcement",
+      message: error.message,
     });
   }
 };
+
 
 // Get notifications for the logged-in organizer
 const getOrganizerNotifications = async (req, res) => {
@@ -280,7 +261,9 @@ const getOrganizerNotifications = async (req, res) => {
     const notifications = await Notification.find({
       organizer: organizerId,
       type: "event_update",
-    }).sort({ createdAt: -1 });
+    })
+      .populate("sender", "firstName lastName role")
+      .sort({ createdAt: -1 });
 
     const unreadCount = notifications.filter(
       (notification) => notification.isRead === false
@@ -302,7 +285,8 @@ const getOrganizerNotifications = async (req, res) => {
   }
 };
 
-// Mark an organizer event notification as read
+
+// Mark organizer event notification as read
 const markOrganizerEventNotificationAsRead = async (req, res) => {
   try {
     const notification = await Notification.findOneAndUpdate(
@@ -345,18 +329,15 @@ const markOrganizerEventNotificationAsRead = async (req, res) => {
 };
 
 
-
-
-
 module.exports = {
-getAdminNotifications,
-markOrganizerNotificationAsRead,
-getUnreadOrganizerNotificationCount,
-approveOrganizer,
-rejectOrganizer,
-getUserNotifications,
-markNotificationAsRead,
-sendAnnouncement,
-getOrganizerNotifications,
-markOrganizerEventNotificationAsRead
+  getAdminNotifications,
+  markOrganizerNotificationAsRead,
+  getUnreadOrganizerNotificationCount,
+  approveOrganizer,
+  rejectOrganizer,
+  getUserNotifications,
+  markNotificationAsRead,
+  sendAnnouncement,
+  getOrganizerNotifications,
+  markOrganizerEventNotificationAsRead,
 };

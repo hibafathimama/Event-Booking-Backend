@@ -41,7 +41,19 @@ const createBooking = async (req, res) => {
       });
     }
 
-    // 2. Find the active event
+    // 2. Validate ticket type
+    const normalizedTicketType = String(ticketType).toLowerCase();
+
+    const allowedTicketTypes = ["general", "vip", "premium"];
+
+    if (!allowedTicketTypes.includes(normalizedTicketType)) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid ticket type",
+      });
+    }
+
+    // 3. Find the active event
     const eventData = await Event.findOne({
       _id: event,
       isActive: true,
@@ -54,7 +66,7 @@ const createBooking = async (req, res) => {
       });
     }
 
-    // 3. Prevent booking past events
+    // 4. Prevent booking past events
     const eventDateTime = new Date(
       `${new Date(eventData.date).toISOString().split("T")[0]}T${eventData.time}`
     );
@@ -73,10 +85,26 @@ const createBooking = async (req, res) => {
       });
     }
 
-    // 4. Calculate the total price using the database price
-    const totalPrice = eventData.ticketPrice * ticketQuantity;
+    // 5. Get price based on selected ticket type
+    const ticketPrice =
+      eventData.ticketPrices?.[normalizedTicketType] ??
+      eventData.ticketPrice;
 
-    // 5. Reserve seats atomically to prevent overbooking
+    if (
+      typeof ticketPrice !== "number" ||
+      !Number.isFinite(ticketPrice) ||
+      ticketPrice < 0
+    ) {
+      return res.status(400).json({
+        status: false,
+        message: "Price is not available for this ticket type",
+      });
+    }
+
+    // 6. Calculate total price
+    const totalPrice = ticketPrice * ticketQuantity;
+
+    // 7. Reserve seats atomically
     const updatedEvent = await Event.findOneAndUpdate(
       {
         _id: event,
@@ -98,15 +126,14 @@ const createBooking = async (req, res) => {
       });
     }
 
-    // Track the booking so we can clean it up if a later step fails.
     let createdBooking = null;
 
     try {
-      // 6. Generate a unique booking ID and secure ticket token
+      // 8. Generate booking ID and ticket token
       const bookingId = "BK" + Date.now();
       const ticketToken = crypto.randomBytes(32).toString("hex");
 
-      // 7. Generate the QR code before saving the booking
+      // 9. Generate QR code
       const frontendUrl =
         process.env.FRONTEND_URL || "http://localhost:3000";
 
@@ -115,7 +142,7 @@ const createBooking = async (req, res) => {
 
       const qrCode = await QRCode.toDataURL(verificationUrl);
 
-      // 8. Save the booking
+      // 10. Save booking
       createdBooking = await Booking.create({
         bookingId,
         ticketToken,
@@ -123,44 +150,45 @@ const createBooking = async (req, res) => {
         checkedInAt: null,
         user: req.user.user_id,
         event,
-        ticketType,
+        ticketType: normalizedTicketType,
         quantity: ticketQuantity,
         totalPrice,
       });
 
-      // 9. Send booking confirmation notification
+      // 11. Booking confirmation notification
       try {
         await Notification.create({
           user: req.user.user_id,
+          sender: null,
           type: "booking_confirmation",
           message: `Your booking for ${eventData.eventName} has been confirmed. Booking ID: ${createdBooking.bookingId}`,
         });
       } catch (notificationError) {
-        // A notification failure should not cancel a successful booking.
         console.error(
           "BOOKING NOTIFICATION ERROR:",
           notificationError
         );
       }
 
-      // 10. Return booking details and QR code
+      // 12. Return booking details and QR code
       return res.status(201).json({
         status: true,
         message: "Booking created successfully",
         data: {
           ...createdBooking.toObject(),
+          ticketPrice,
           qrCode,
         },
       });
     } catch (bookingError) {
-      // 11. Remove the booking if it was saved before an error occurred
+      // Delete booking if a later step fails
       if (createdBooking) {
         await Booking.deleteOne({
           _id: createdBooking._id,
         });
       }
 
-      // Restore the seats reserved for this booking
+      // Restore reserved seats
       await Event.findByIdAndUpdate(event, {
         $inc: { availableSeats: ticketQuantity },
       });
@@ -178,8 +206,7 @@ const createBooking = async (req, res) => {
 };
 
 
-
-//getMYbookings
+// GET MY BOOKINGS
 const getMybookings = async (req, res) => {
   try {
     const bookings = await Booking.find({
@@ -199,7 +226,6 @@ const getMybookings = async (req, res) => {
       bookings.map(async (booking) => {
         const bookingData = booking.toObject();
 
-        // Generate a QR code if the booking has a ticket token.
         if (booking.ticketToken) {
           const verificationUrl =
             `${frontendUrl}/organizer/verify-ticket?token=${booking.ticketToken}`;
@@ -231,43 +257,42 @@ const getMybookings = async (req, res) => {
 };
 
 
-
-//getAllbookings
-const getAllbookings = async(req,res)=>{
-  try{
+// GET ALL BOOKINGS
+const getAllbookings = async (req, res) => {
+  try {
     const bookings = await Booking.find()
-    .populate("user", "firstName lastName email")
-    .populate("event","eventName date time venue location ticketPrice");
+      .populate("user", "firstName lastName email")
+      .populate(
+        "event",
+        "eventName date time venue location ticketPrice"
+      );
 
     return res.status(200).json({
-      status:true,
-      message:"All booking Fetched successfully",
-      data:bookings
+      status: true,
+      message: "All booking fetched successfully",
+      data: bookings,
     });
-  }catch(error){
-        console.error("GET ALL BOOKINGS ERROR:", error);
+  } catch (error) {
+    console.error("GET ALL BOOKINGS ERROR:", error);
 
     return res.status(500).json({
-      message: error.message || "Failed to fetch bookings"
+      message: error.message || "Failed to fetch bookings",
     });
-
   }
 };
 
-//organizershow their bookings
+
+// ORGANIZER BOOKINGS
 const getOrganizerBookings = async (req, res) => {
   try {
-    // Find all events created by this organizer
     const events = await Event.find({
-      organizer: req.user.user_id
+      organizer: req.user.user_id,
     });
 
-    // Get the event IDs
     const eventIds = events.map((event) => event._id);
 
-    // Find bookings for those events
     const bookings = await Booking.find({
-      event: { $in: eventIds }
+      event: { $in: eventIds },
     })
       .populate("user", "firstName lastName email")
       .populate(
@@ -278,104 +303,110 @@ const getOrganizerBookings = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: "Organizer bookings fetched successfully",
-      data: bookings
+      data: bookings,
     });
-
   } catch (error) {
     console.error("GET ORGANIZER BOOKINGS ERROR:", error);
 
     return res.status(500).json({
-      message: error.message || "Failed to fetch organizer bookings"
+      message: error.message || "Failed to fetch bookings",
     });
   }
 };
 
- //cancel booking
-const cancelBooking = async(req,res)=>{
-  try{
 
-          //validation
-      const errors = validationResult(req);
+// CANCEL BOOKING
+const cancelBooking = async (req, res) => {
+  try {
+    const errors = validationResult(req);
 
     if (!errors.isEmpty()) {
       return res.status(422).json({
-        message: errors.array()[0].msg
-      });
-      }
-      
-    const {id}=req.params;
-
-    //find the booking
-    const booking = await Booking.findOne({
-      _id:id,
-      user:req.user.user_id
-    });
-        if (!booking) {
-      return res.status(404).json({
-        message: "Booking not found"
+        message: errors.array()[0].msg,
       });
     }
-        // Check if already cancelled
+
+    const { id } = req.params;
+
+    // Find booking
+    const booking = await Booking.findOne({
+      _id: id,
+      user: req.user.user_id,
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        message: "Booking not found",
+      });
+    }
+
     if (booking.status === "cancelled") {
       return res.status(400).json({
-        message: "Booking is already cancelled"
+        message: "Booking is already cancelled",
       });
     }
-      //find the event 
-      const event =await Event.findById(booking.event);
-      if(!event){
-        return res.status(404).json({
-          message:"event not found"
-        });
-      }
 
-      // Return seats to the event when booking is cancelled
-      await Event.findByIdAndUpdate(
-        booking.event,
-        {
-          $inc: { availableSeats: booking.quantity },
-        },
-        {
-          runValidators: true,
-        }
-      );
+    // Find event
+    const event = await Event.findById(booking.event);
 
-      //change bookig status
-      booking.status="cancelled";
-
-      await booking.save();
-
-      // Create booking cancellation notification
-      try {
-        await Notification.create({
-          user: req.user.user_id,
-          type: "booking_cancellation",
-          message: `Your booking for ${event.eventName} has been cancelled successfully. Booking ID: ${booking.bookingId}`,
-        });
-      } catch (notificationError) {
-        console.error("BOOKING CANCELLATION NOTIFICATION ERROR:", notificationError);
-      }
-
-      return res.status(200).json({
-        status:true,
-        message:"Booking cancelled successfully",
-        data:booking
+    if (!event) {
+      return res.status(404).json({
+        message: "Event not found",
       });
+    }
 
-}catch(error){
-     return res.status(500).json({
-      message: error.message || "Failed to cancel booking"
+    // Restore available seats
+    await Event.findByIdAndUpdate(
+      booking.event,
+      {
+        $inc: { availableSeats: booking.quantity },
+      },
+      {
+        runValidators: true,
+      }
+    );
+
+    // Update booking status
+    booking.status = "cancelled";
+
+    await booking.save();
+
+    //  Create booking cancellation notification
+    // Automatically generated by the system
+    try {
+      await Notification.create({
+        user: req.user.user_id,
+        sender: null,
+        type: "booking_cancellation",
+        message: `Your booking for ${event.eventName} has been cancelled successfully. Booking ID: ${booking.bookingId}`,
+      });
+    } catch (notificationError) {
+      console.error(
+        "BOOKING CANCELLATION NOTIFICATION ERROR:",
+        notificationError
+      );
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: "Booking cancelled successfully",
+      data: booking,
     });
+  } catch (error) {
+    console.error("CANCEL BOOKING ERROR:", error);
 
-}
-}
+    return res.status(500).json({
+      message: error.message || "Failed to cancel booking",
+    });
+  }
+};
 
-// Get one booking by ID for viewing a ticket
+
+// GET BOOKING BY ID FOR USER TICKET
 const getBookingById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Find the booking belonging to the logged-in user
     const booking = await Booking.findOne({
       _id: id,
       user: req.user.user_id,
@@ -393,7 +424,6 @@ const getBookingById = async (req, res) => {
       });
     }
 
-    // Generate QR code for the ticket
     let qrCode = null;
 
     if (booking.ticketToken) {
@@ -406,10 +436,8 @@ const getBookingById = async (req, res) => {
       qrCode = await QRCode.toDataURL(verificationUrl);
     }
 
-    // Convert booking document to a plain object
     const bookingData = booking.toObject();
 
-    // Add QR code to the response
     bookingData.qrCode = qrCode;
 
     return res.status(200).json({
@@ -428,13 +456,11 @@ const getBookingById = async (req, res) => {
 };
 
 
-
-// Get booking details for an organizer
+// GET ORGANIZER BOOKING DETAILS
 const getOrganizerBookingById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Find the booking and populate event and customer details
     const booking = await Booking.findById(id)
       .populate(
         "event",
@@ -442,7 +468,6 @@ const getOrganizerBookingById = async (req, res) => {
       )
       .populate("user", "firstName lastName email");
 
-    // Check whether the booking exists
     if (!booking) {
       return res.status(404).json({
         status: false,
@@ -450,7 +475,6 @@ const getOrganizerBookingById = async (req, res) => {
       });
     }
 
-    // Check whether the event exists
     if (!booking.event) {
       return res.status(404).json({
         status: false,
@@ -458,7 +482,6 @@ const getOrganizerBookingById = async (req, res) => {
       });
     }
 
-    // Allow access only if this organizer created the event
     if (
       booking.event.organizer.toString() !==
       req.user.user_id.toString()
@@ -485,6 +508,7 @@ const getOrganizerBookingById = async (req, res) => {
 };
 
 
+// VERIFY TICKET
 const verifyTicket = async (req, res) => {
   try {
     const { token } = req.body;
@@ -496,8 +520,9 @@ const verifyTicket = async (req, res) => {
       });
     }
 
-    // Find the booking using the secure ticket token
-    const booking = await Booking.findOne({ ticketToken: token })
+    const booking = await Booking.findOne({
+      ticketToken: token,
+    })
       .populate("event", "eventName date time venue organizer")
       .populate("user", "firstName lastName email");
 
@@ -522,9 +547,9 @@ const verifyTicket = async (req, res) => {
       });
     }
 
-    // Ensure this organizer owns the event
     if (
-      booking.event.organizer.toString() !== req.user.user_id.toString()
+      booking.event.organizer.toString() !==
+      req.user.user_id.toString()
     ) {
       return res.status(403).json({
         status: false,
@@ -532,7 +557,6 @@ const verifyTicket = async (req, res) => {
       });
     }
 
-    // Prevent the same ticket from being used twice
     if (booking.checkedIn) {
       return res.status(400).json({
         status: false,
@@ -586,8 +610,3 @@ module.exports = {
   getOrganizerBookingById,
   verifyTicket,
 };
-
-
-
-
-

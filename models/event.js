@@ -70,10 +70,22 @@ description: {
   trim: true,
 },
 
-ticketPrice: {
-  type: Number,
-  required: true,
-  min: 0,
+ticketPrices: {
+  general: {
+    type: Number,
+    required: true,
+    min: 0,
+  },
+  vip: {
+    type: Number,
+    required: true,
+    min: 0,
+  },
+  premium: {
+    type: Number,
+    required: true,
+    min: 0,
+  },
 },
 
 totalSeats: {

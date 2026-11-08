@@ -80,6 +80,59 @@ const deleteUser =async(req,res)=>{
     }
 };
 
+// Activate or deactivate user account
+const toggleUserStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findById(id);
+
+    if (!user) {
+      return res.status(404).json({
+        status: false,
+        message: "User not found",
+      });
+    }
+
+    // Prevent changing admin account status
+    if (user.role === "admin") {
+      return res.status(403).json({
+        status: false,
+        message: "Admin account status cannot be changed",
+      });
+    }
+
+    // Toggle account status
+    const currentlyActive = user.isActive !== false;
+    user.isActive = !currentlyActive;
+
+    await user.save();
+
+    return res.status(200).json({
+      status: true,
+      message: user.isActive
+        ? "User account activated successfully"
+        : "User account deactivated successfully",
+      data: {
+        _id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: user.role,
+        isActive: user.isActive,
+      },
+    });
+
+  } catch (error) {
+    console.error("TOGGLE USER STATUS ERROR:", error);
+
+    return res.status(500).json({
+      status: false,
+      message: error.message || "Failed to update user status",
+    });
+  }
+};
+
 //get all events 
 
 const getAllEvents = async(req,res)=>{
@@ -456,6 +509,7 @@ module.exports={
  getAllUsers,
  getOneUser,
  deleteUser,
+ toggleUserStatus,
  getAllEvents,
  getEventByid,
  deleteEvent,

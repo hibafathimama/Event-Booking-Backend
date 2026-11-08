@@ -18,13 +18,19 @@ const registerUser = async (req, res) => {
       });
     }
 
-    const { firstName, lastName, email, password, role } = req.body;
-
-    if (!req.file) {
-    return res.status(400).json({
-        message: "Profile image is required",
-    });
-    }
+    const {
+      firstName,
+      lastName,
+      email,
+      password,
+      role,
+      organizationName,
+      contactNumber,
+      organizationType,
+      organizationAddress,
+      organizationDescription,
+      website,
+    } = req.body;
 
     // Check required fields
     if (!firstName || !lastName || !email || !password) {
@@ -33,8 +39,41 @@ const registerUser = async (req, res) => {
       });
     }
 
+    // Profile image is required
+    if (!req.file) {
+      return res.status(400).json({
+        message: "Profile image is required",
+      });
+    }
+
+    // Only user and organizer registration are allowed publicly
+    const selectedRole = role || "user";
+
+    if (!["user", "organizer"].includes(selectedRole)) {
+      return res.status(400).json({
+        message: "Invalid registration role",
+      });
+    }
+
+    // Organizer details validation
+    if (selectedRole === "organizer") {
+      if (
+        !organizationName?.trim() ||
+        !contactNumber?.trim() ||
+        !organizationType?.trim() ||
+        !organizationAddress?.trim() ||
+        !organizationDescription?.trim()
+      ) {
+        return res.status(400).json({
+          message: "All organizer details are required",
+        });
+      }
+    }
+
     // Check if email already exists
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({
+      email: email.trim().toLowerCase(),
+    });
 
     if (existingUser) {
       return res.status(400).json({
@@ -45,37 +84,46 @@ const registerUser = async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Get the uploaded profile image path
-    const image = req.file
-      ? `/uploads/profiles/${req.file.filename}`
-      : "";
+    // Get uploaded profile image path
+    const image = `/uploads/profiles/${req.file.filename}`;
 
-const selectedRole = role || "user";
+    // Organizer details
+    const organizerDetails =
+      selectedRole === "organizer"
+        ? {
+            organizationName: organizationName.trim(),
+            contactNumber: contactNumber.trim(),
+            organizationType: organizationType.trim(),
+            organizationAddress: organizationAddress.trim(),
+            organizationDescription: organizationDescription.trim(),
+            website: website?.trim() || "",
+          }
+        : undefined;
 
-        // Only organizers need admin verification
-        const verificationStatus =
-        selectedRole === "organizer" ? "pending" : "approved";
+    // Verification status
+    const verificationStatus =
+      selectedRole === "organizer" ? "pending" : "approved";
 
-        // Create user
-        const user = await User.create({
-        firstName,
-        lastName,
-        email,
-        password: hashedPassword,
-        role: selectedRole,
-        verificationStatus,
-        image,
-        });
+    // Create user
+    const user = await User.create({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: email.trim().toLowerCase(),
+      password: hashedPassword,
+      role: selectedRole,
+      verificationStatus,
+      image,
+      ...(organizerDetails && { organizerDetails }),
+    });
 
-        // Notify admin when a new organizer registers
-        if (selectedRole === "organizer") {
-        await Notification.create({
-            message: `New organizer registration: ${user.firstName} ${user.lastName} requires verification.`,
-            type: "organizer_verification",
-            organizer: user._id,
-        });
-        }
-
+    // Notify admin when a new organizer registers
+    if (selectedRole === "organizer") {
+      await Notification.create({
+        message: `New organizer registration: ${user.firstName} ${user.lastName} requires verification.`,
+        type: "organizer_verification",
+        organizer: user._id,
+      });
+    }
 
     // Generate JWT token
     const token = jwt.sign(
@@ -91,12 +139,12 @@ const selectedRole = role || "user";
 
     // Send response
     return res.status(201).json({
-    status: true,
-    message:
+      status: true,
+      message:
         selectedRole === "organizer"
-        ? "Registration successful! Your account is awaiting admin verification."
-        : "Registration successful!",
-    data: {
+          ? "Registration successful! Your account is awaiting admin verification."
+          : "Registration successful!",
+      data: {
         id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
@@ -104,10 +152,10 @@ const selectedRole = role || "user";
         role: user.role,
         verificationStatus: user.verificationStatus,
         image: user.image,
-    },
-    accessToken: token,
+        organizerDetails: user.organizerDetails,
+      },
+      accessToken: token,
     });
-
   } catch (error) {
     console.log("REGISTER USER ERROR:", error);
 
@@ -119,244 +167,228 @@ const selectedRole = role || "user";
 
 
 
-const loginUser=async(req,res)=>{
-  try{
-    //validation
-      const errors = validationResult(req);
+const loginUser = async (req, res) => {
+  try {
+    // Validation
+    const errors = validationResult(req);
 
-      if (!errors.isEmpty()) {
-        return res.status(422).json({
-          message: errors.array()[0].msg,
-        });
-      }
+    if (!errors.isEmpty()) {
+      return res.status(422).json({
+        message: errors.array()[0].msg,
+      });
+    }
 
-    const {email,password} = req.body;
+    const { email, password } = req.body;
 
-    //check required fields
-
-    if(!email || !password){
+    // Check required fields
+    if (!email || !password) {
       return res.status(400).json({
-        message:"Email and password are required"
+        message: "Email and password are required",
       });
     }
 
-    //find user by email
-     const user = await User.findOne({ email }).select(
-     "_id firstName lastName email role password verificationStatus"
-     );
+    // Find user by email
+    const user = await User.findOne({ email }).select(
+      "_id firstName lastName email role password verificationStatus"
+    );
 
-    //check if user exist 
-    if(!user){
+    // Check if user exists
+    if (!user) {
       return res.status(401).json({
-        message:"Invalid Email or password",
+        message: "Invalid Email or password",
       });
     }
 
-    //compared entered password with hashed password
-    const isMatch = await bcrypt.compare (password,user.password);
+    // Compare entered password with hashed password
+    const isMatch = await bcrypt.compare(password, user.password);
 
-    if(!isMatch){
+    if (!isMatch) {
       return res.status(401).json({
-        message:"Invalid email or password"
+        message: "Invalid email or password",
       });
     }
 
     // Check whether the organizer is approved
-        if (
-        user.role === "organizer" &&
-        user.verificationStatus !== "approved"
-        ) {
-        return res.status(403).json({
-            status: false,
-            message:
-            user.verificationStatus === "rejected"
-                ? "Your organizer application has been rejected. Please contact the admin."
-                : "Your account is awaiting admin approval. You cannot log in yet.",
-        });
-        }
+    if (
+      user.role === "organizer" &&
+      user.verificationStatus !== "approved"
+    ) {
+      return res.status(403).json({
+        status: false,
+        message:
+          user.verificationStatus === "rejected"
+            ? "Your organizer application has been rejected. Please contact the admin."
+            : "Your account is awaiting admin approval. You cannot log in yet.",
+      });
+    }
 
+    // Create JWT token
+    const token = jwt.sign(
+      {
+        user_id: user._id,
+        role: user.role,
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: process.env.JWT_TOKEN_EXPIRY || "1d",
+      }
+    );
 
-const crypto = require("crypto");
-
-console.log(
-  "LOGIN SECRET FINGERPRINT:",
-  crypto
-    .createHash("sha256")
-    .update(process.env.JWT_SECRET || "")
-    .digest("hex")
-    .slice(0, 12)
-);
-    //create JWT token
-
-        const token = jwt.sign(
-        {
-            user_id: user._id,
-            role: user.role,
-        },
-        process.env.JWT_SECRET,
-        {
-            expiresIn: process.env.JWT_TOKEN_EXPIRY || "1d",
-        }
-        );
-        console.log("New JWT generated during login");
-        console.log(
-  "LOGIN TOKEN HASH:",
-  crypto.createHash("sha256").update(token).digest("hex").slice(0, 12)
-);
+    console.log("New JWT generated during login");
 
     // Send response
     return res.status(200).json({
-    status: true,
-    message: "Login successful!",
-    data: {
+      status: true,
+      message: "Login successful!",
+      data: {
+        _id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
         role: user.role,
         verificationStatus: user.verificationStatus,
-    },
-    accessToken: token,
+      },
+      accessToken: token,
     });
-  }catch(error){
+
+  } catch (error) {
+    console.error("Login error:", error);
+
     return res.status(500).json({
-      message:error.message ||"internal server error",
+      message: error.message || "Internal server error",
     });
   }
-  
 };
-
 
 // Get logged-in user's profile
 const getMyProfile = async (req, res) => {
-    try {
-        const userId = req.user.user_id;
+  try {
+    const userId = req.user.user_id;
 
-        const user = await User.findById(userId).select("-password");
+    const user = await User.findById(userId).select("-password");
 
-        if (!user) {
-            return res.status(404).json({
-                status: false,
-                message: "User not found"
-            });
-        }
-
-        return res.status(200).json({
-            status: true,
-            message: "Profile fetched successfully",
-            data: user
-        });
-
-    } catch (error) {
-        console.error("GET MY PROFILE ERROR:", error);
-
-        return res.status(500).json({
-            status: false,
-            message: "Failed to fetch profile"
-        });
+    if (!user) {
+      return res.status(404).json({
+        status: false,
+        message: "User not found",
+      });
     }
+
+    return res.status(200).json({
+      status: true,
+      message: "Profile fetched successfully",
+      data: user,
+    });
+  } catch (error) {
+    console.error("GET MY PROFILE ERROR:", error);
+
+    return res.status(500).json({
+      status: false,
+      message: "Failed to fetch profile",
+    });
+  }
 };
 
 const updateMyProfile = async (req, res) => {
-try {
-const userId = req.user.user_id;
+  try {
+    const userId = req.user.user_id;
 
     const { firstName, lastName, email } = req.body;
 
     // Check whether at least one field or image is provided
     if (
-        firstName === undefined &&
-        lastName === undefined &&
-        email === undefined &&
-        !req.file
+      firstName === undefined &&
+      lastName === undefined &&
+      email === undefined &&
+      !req.file
     ) {
-        return res.status(400).json({
-            status: false,
-            message: "Please provide at least one field to update"
-        });
+      return res.status(400).json({
+        status: false,
+        message: "Please provide at least one field to update",
+      });
     }
 
-    // Validate the provided fields
+    // Validate first name, last name and email
     if (
-        (firstName !== undefined &&
-            (typeof firstName !== "string" || !firstName.trim())) ||
-
-        (lastName !== undefined &&
-            (typeof lastName !== "string" || !lastName.trim())) ||
-
-        (email !== undefined &&
-            (typeof email !== "string" ||
-                !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())))
+      (firstName !== undefined &&
+        (typeof firstName !== "string" || !firstName.trim())) ||
+      (lastName !== undefined &&
+        (typeof lastName !== "string" || !lastName.trim())) ||
+      (email !== undefined &&
+        (typeof email !== "string" ||
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())))
     ) {
-        return res.status(400).json({
-            status: false,
-            message: "Please provide valid profile details"
-        });
+      return res.status(400).json({
+        status: false,
+        message: "Please provide valid profile details",
+      });
     }
 
     // Check whether another user already uses this email
     if (email !== undefined) {
-        const existingUser = await User.findOne({
-            email: email.trim().toLowerCase(),
-            _id: { $ne: userId }
-        });
+      const existingUser = await User.findOne({
+        email: email.trim().toLowerCase(),
+        _id: { $ne: userId },
+      });
 
-        if (existingUser) {
-            return res.status(409).json({
-                status: false,
-                message: "Email is already registered"
-            });
-        }
+      if (existingUser) {
+        return res.status(409).json({
+          status: false,
+          message: "Email is already registered",
+        });
+      }
     }
 
-    // Prepare the fields to update
+    // Prepare fields to update
     const updates = {};
 
     if (firstName !== undefined) {
-        updates.firstName = firstName.trim();
+      updates.firstName = firstName.trim();
     }
 
     if (lastName !== undefined) {
-        updates.lastName = lastName.trim();
+      updates.lastName = lastName.trim();
     }
 
     if (email !== undefined) {
-        updates.email = email.trim().toLowerCase();
+      updates.email = email.trim().toLowerCase();
     }
 
-    // Update profile image if a new image is uploaded
+    // Update profile image
     if (req.file) {
-        updates.image = `/uploads/profiles/${req.file.filename}`;
+      updates.image = `/uploads/profiles/${req.file.filename}`;
     }
 
     // Update user in MongoDB
     const updatedUser = await User.findByIdAndUpdate(
-        userId,
-        { $set: updates },
-        { new: true, runValidators: true }
+      userId,
+      { $set: updates },
+      {
+        new: true,
+        runValidators: true,
+      }
     ).select("-password");
 
     if (!updatedUser) {
-        return res.status(404).json({
-            status: false,
-            message: "User not found"
-        });
+      return res.status(404).json({
+        status: false,
+        message: "User not found",
+      });
     }
 
     return res.status(200).json({
-        status: true,
-        message: "Profile updated successfully",
-        data: updatedUser
+      status: true,
+      message: "Profile updated successfully",
+      data: updatedUser,
     });
-
-} catch (error) {
+  } catch (error) {
     console.error("UPDATE MY PROFILE ERROR:", error);
 
     return res.status(500).json({
-        status: false,
-        message: "Failed to update profile"
+      status: false,
+      message: "Failed to update profile",
     });
-}
-
+  }
 };
 
 

@@ -1,5 +1,5 @@
 const express = require("express");
-const { createEvent,getAllEvents,getEventById,updateEvent,deleteEvent,getMyEvents } = require("../controllers/eventController");
+const { createEvent,getAllEvents,getEventFilterOptions,getEventById,updateEvent,deleteEvent,getMyEvents } = require("../controllers/eventController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { check } = require("express-validator");
 const roleMiddleware = require("../middleware/roleMiddleware");
@@ -18,7 +18,9 @@ router.post(
     createEvent
 );
 // Get all events (public)
-router.get("/getevent", getAllEvents);
+router.get("/getevent",authMiddleware,getAllEvents);
+
+router.get("/filter-options", getEventFilterOptions);
 
 // Get events created by the logged-in organizer
 router.get(
@@ -35,58 +37,67 @@ router.get(
   getEventById
 );
 
-router.put("/:id",authMiddleware,  roleMiddleware(["organizer"]),
-[
-  check("id")
-    .isMongoId()
-    .withMessage("Invalid event ID"),
+router.put(
+  "/:id",
+  authMiddleware,
+  roleMiddleware(["organizer"]),
 
-  check("eventName")
-    .optional()
-    .notEmpty()
-    .withMessage("Event name cannot be empty"),
+  // Multer processes FormData and image upload
+  upload.single("image"),
 
-  check("category")
-    .optional()
-    .notEmpty()
-    .withMessage("Category cannot be empty"),
+  [
+    check("id")
+      .isMongoId()
+      .withMessage("Invalid event ID"),
 
-  check("date")
-    .optional()
-    .notEmpty()
-    .withMessage("Date cannot be empty"),
+    check("eventName")
+      .optional()
+      .notEmpty()
+      .withMessage("Event name cannot be empty"),
 
-  check("time")
-    .optional()
-    .notEmpty()
-    .withMessage("Time cannot be empty"),
+    check("category")
+      .optional()
+      .notEmpty()
+      .withMessage("Category cannot be empty"),
 
-  check("venue")
-    .optional()
-    .notEmpty()
-    .withMessage("Venue cannot be empty"),
+    check("date")
+      .optional()
+      .notEmpty()
+      .withMessage("Date cannot be empty"),
 
-  check("location")
-    .optional()
-    .notEmpty()
-    .withMessage("Location cannot be empty"),
+    check("time")
+      .optional()
+      .notEmpty()
+      .withMessage("Time cannot be empty"),
 
-  check("description")
-    .optional()
-    .notEmpty()
-    .withMessage("Description cannot be empty"),
+    check("venue")
+      .optional()
+      .notEmpty()
+      .withMessage("Venue cannot be empty"),
 
-  check("ticketPrice")
-    .optional()
-    .isNumeric()
-    .withMessage("Ticket price must be numeric"),
+    check("location")
+      .optional()
+      .notEmpty()
+      .withMessage("Location cannot be empty"),
 
-  check("availableSeats")
-    .optional()
-    .isNumeric()
-    .withMessage("Available seats must be numeric"),
-], 
-    updateEvent)
+    check("description")
+      .optional()
+      .notEmpty()
+      .withMessage("Description cannot be empty"),
+
+    check("ticketPrice")
+      .optional()
+      .isNumeric()
+      .withMessage("Ticket price must be numeric"),
+
+    check("availableSeats")
+      .optional()
+      .isNumeric()
+      .withMessage("Available seats must be numeric"),
+  ],
+
+  updateEvent
+);
 
 
 router.delete("/:id",authMiddleware,  roleMiddleware(["organizer"]),

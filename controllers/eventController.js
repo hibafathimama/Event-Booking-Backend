@@ -2,146 +2,197 @@ const Event =require("../models/event")
 const { validationResult } = require("express-validator");
 const Booking = require("../models/booking");
 const Notification = require("../models/notification");
+const Report = require("../models/report");
 
 //create event
 const createEvent = async (req, res) => {
-try {
-const errors = validationResult(req);
-
-if (!errors.isEmpty()) {
-  return res.status(422).json({
-    message: errors.array()[0].msg,
-  });
-}
-
-const {
-  eventName,
-  category,
-  date,
-  time,
-  venue,
-  location,
-  description,
-  ticketPrice,
-  totalSeats,
-  seatingType = "general",
-  seats,
-} = req.body;
-
-const image = req.file ? req.file.path : null;
-
-if (
-  !eventName ||
-  !category ||
-  !date ||
-  !time ||
-  !venue ||
-  !location ||
-  !description ||
-  ticketPrice === undefined ||
-  totalSeats === undefined
-) {
-  return res.status(400).json({
-    message: "All fields are required",
-  });
-}
-
-const seatCount = Number(totalSeats);
-const price = Number(ticketPrice);
-
-if (
-  !Number.isInteger(seatCount) ||
-  seatCount < 1 ||
-  !Number.isFinite(price) ||
-  price < 0
-) {
-  return res.status(400).json({
-    message: "Invalid ticket price or total seats",
-  });
-}
-
-if (!["general", "reserved"].includes(seatingType)) {
-  return res.status(400).json({
-    message: "Invalid seating type",
-  });
-}
-
-let eventSeats = [];
-
-// Validate individual seats for reserved seating events.
-if (seatingType === "reserved") {
   try {
-    eventSeats =
-      typeof seats === "string" ? JSON.parse(seats) : seats;
+    const errors = validationResult(req);
+
+    if (!errors.isEmpty()) {
+      return res.status(422).json({
+        message: errors.array()[0].msg,
+      });
+    }
+
+    const {
+      eventName,
+      category,
+      date,
+      time,
+      venue,
+      location,
+      description,
+      ticketPrices,
+      totalSeats,
+      seatingType = "general",
+      seats,
+    } = req.body;
+
+    const image = req.file ? req.file.path : null;
+
+    // 1. Validate required fields
+    if (
+      !eventName ||
+      !category ||
+      !date ||
+      !time ||
+      !venue ||
+      !location ||
+      !description ||
+      ticketPrices === undefined ||
+      totalSeats === undefined
+    ) {
+      return res.status(400).json({
+        message: "All fields are required",
+      });
+    }
+
+    // 2. Parse ticket prices
+    let prices;
+
+    try {
+      prices =
+        typeof ticketPrices === "string"
+          ? JSON.parse(ticketPrices)
+          : ticketPrices;
+    } catch (error) {
+      return res.status(400).json({
+        message: "Invalid ticket prices data",
+      });
+    }
+
+    if (
+      !prices ||
+      typeof prices !== "object" ||
+      Array.isArray(prices)
+    ) {
+      return res.status(400).json({
+        message: "Invalid ticket prices",
+      });
+    }
+
+    const generalPrice = Number(prices.general);
+    const vipPrice = Number(prices.vip);
+    const premiumPrice = Number(prices.premium);
+
+    // 3. Validate individual ticket prices
+    if (
+      !Number.isFinite(generalPrice) ||
+      generalPrice < 0 ||
+      !Number.isFinite(vipPrice) ||
+      vipPrice < 0 ||
+      !Number.isFinite(premiumPrice) ||
+      premiumPrice < 0
+    ) {
+      return res.status(400).json({
+        message: "Please enter valid prices for all ticket types",
+      });
+    }
+
+    const seatCount = Number(totalSeats);
+
+    if (!Number.isInteger(seatCount) || seatCount < 1) {
+      return res.status(400).json({
+        message: "Invalid total seats",
+      });
+    }
+
+    // 4. Validate seating type
+    if (!["general", "reserved"].includes(seatingType)) {
+      return res.status(400).json({
+        message: "Invalid seating type",
+      });
+    }
+
+    let eventSeats = [];
+
+    // 5. Validate individual seats for reserved seating
+    if (seatingType === "reserved") {
+      try {
+        eventSeats =
+          typeof seats === "string"
+            ? JSON.parse(seats)
+            : seats;
+      } catch (error) {
+        return res.status(400).json({
+          message: "Invalid seats data",
+        });
+      }
+
+      if (
+        !Array.isArray(eventSeats) ||
+        eventSeats.length !== seatCount
+      ) {
+        return res.status(400).json({
+          message: "The number of seats must match total seats",
+        });
+      }
+
+      const seatNumbers = eventSeats.map((seat) =>
+        typeof seat === "string"
+          ? seat.trim()
+          : seat.seatNumber?.trim()
+      );
+
+      if (
+        seatNumbers.some((seat) => !seat) ||
+        new Set(seatNumbers).size !== seatNumbers.length
+      ) {
+        return res.status(400).json({
+          message: "Seat numbers must be valid and unique",
+        });
+      }
+
+      eventSeats = seatNumbers.map((seatNumber) => ({
+        seatNumber,
+        status: "available",
+      }));
+    }
+
+    // 6. Create event
+    const event = await Event.create({
+      eventName,
+      category,
+      date,
+      time,
+      venue,
+      location,
+      description,
+
+      ticketPrices: {
+        general: generalPrice,
+        vip: vipPrice,
+        premium: premiumPrice,
+      },
+
+      totalSeats: seatCount,
+      availableSeats: seatCount,
+      seatingType,
+      seats: eventSeats,
+      image,
+      organizer: req.user.user_id,
+    });
+
+    return res.status(201).json({
+      status: true,
+      message: "Event created successfully",
+      data: event,
+    });
+
   } catch (error) {
-    return res.status(400).json({
-      message: "Invalid seats data",
+    console.error("Create Event Error:", error);
+
+    return res.status(500).json({
+      status: false,
+      message: error.message,
     });
   }
-
-  if (!Array.isArray(eventSeats) || eventSeats.length !== seatCount) {
-    return res.status(400).json({
-      message: "The number of seats must match total seats",
-    });
-  }
-
-  const seatNumbers = eventSeats.map((seat) =>
-    typeof seat === "string" ? seat.trim() : ""
-  );
-
-  if (
-    seatNumbers.some((seat) => !seat) ||
-    new Set(seatNumbers).size !== seatNumbers.length
-  ) {
-    return res.status(400).json({
-      message: "Seat numbers must be valid and unique",
-    });
-  }
-
-  eventSeats = seatNumbers.map((seatNumber) => ({
-    seatNumber,
-    status: "available",
-  }));
-}
-
-const event = await Event.create({
-  eventName,
-  category,
-  date,
-  time,
-  venue,
-  location,
-  description,
-  ticketPrice: price,
-  totalSeats: seatCount,
-  availableSeats: seatCount,
-  seatingType,
-  seats: eventSeats,
-  image,
-  organizer: req.user.user_id,
-});
-
-return res.status(201).json({
-  message: "Event created successfully",
-  data: event,
-});
-
-
-} catch (error) {
-console.error("Create Event Error:", error);
-
-
-return res.status(500).json({
-  message: error.message,
-});
-
-
-}
 };
 
 
 
-//get all event
+// Get all upcoming events with pagination
 const getAllEvents = async (req, res) => {
   try {
     const {
@@ -152,28 +203,62 @@ const getAllEvents = async (req, res) => {
       minPrice,
       maxPrice,
       page = 1,
-      limit = 10,
+      limit = 9,
     } = req.query;
 
-    // Show only active events to users.
-    const filter = { isActive: true };
+    const now = new Date();
 
-    // Search by event name.
+    // Start of today
+    const todayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
+
+    // Show only active upcoming events
+    const filter = {
+      isActive: true,
+      date: {
+        $gte: todayStart,
+      },
+    };
+
+    // Exclude events reported by the logged-in user
+    if (req.user && req.user.user_id) {
+      const reportedEventIds = await Report.distinct("event", {
+        reportedBy: req.user.user_id,
+      });
+
+      filter._id = {
+        $nin: reportedEventIds,
+      };
+    }
+
+    // Search by event name
     if (search) {
-      filter.eventName = { $regex: search, $options: "i" };
+      filter.eventName = {
+        $regex: search,
+        $options: "i",
+      };
     }
 
-    // Filter by category.
+    // Filter by category
     if (category) {
-      filter.category = { $regex: category, $options: "i" };
+      filter.category = {
+        $regex: category,
+        $options: "i",
+      };
     }
 
-    // Filter by location.
+    // Filter by location
     if (location) {
-      filter.location = { $regex: location, $options: "i" };
+      filter.location = {
+        $regex: location,
+        $options: "i",
+      };
     }
 
-    // Filter by date.
+    // Filter by selected date
     if (date) {
       const selectedDate = new Date(date);
 
@@ -190,13 +275,28 @@ const getAllEvents = async (req, res) => {
       const endDate = new Date(selectedDate);
       endDate.setHours(23, 59, 59, 999);
 
+      // Do not show events from previous dates
+      if (endDate < todayStart) {
+        return res.status(200).json({
+          status: true,
+          message: "Events fetched successfully.",
+          data: [],
+          pagination: {
+            totalEvents: 0,
+            currentPage: 1,
+            totalPages: 0,
+            limit: Number(limit) || 9,
+          },
+        });
+      }
+
       filter.date = {
-        $gte: startDate,
+        $gte: startDate > todayStart ? startDate : todayStart,
         $lte: endDate,
       };
     }
 
-    // Filter by ticket price.
+    // Filter by ticket price
     if (minPrice !== undefined || maxPrice !== undefined) {
       filter.ticketPrice = {};
 
@@ -209,19 +309,74 @@ const getAllEvents = async (req, res) => {
       }
     }
 
+    // Pagination
     const currentPage = Math.max(1, Number(page) || 1);
-    const pageLimit = Math.max(1, Number(limit) || 10);
+    const pageLimit = Math.max(1, Number(limit) || 9);
     const skip = (currentPage - 1) * pageLimit;
 
-    const [events, totalEvents] = await Promise.all([
-      Event.find(filter)
-        .populate("organizer", "firstName lastName email")
-        .skip(skip)
-        .limit(pageLimit)
-        .sort({ date: 1 }),
+    // Fetch events
+    let upcomingEvents = await Event.find(filter)
+      .populate("organizer", "firstName lastName email")
+      .sort({ date: 1 });
 
-      Event.countDocuments(filter),
-    ]);
+    // Remove today's events whose start time has already passed
+    upcomingEvents = upcomingEvents.filter((event) => {
+      const eventDate = new Date(event.date);
+
+      const eventDay = new Date(
+        eventDate.getFullYear(),
+        eventDate.getMonth(),
+        eventDate.getDate()
+      );
+
+      // Future dates are valid
+      if (eventDay > todayStart) {
+        return true;
+      }
+
+      // Past dates are invalid
+      if (eventDay < todayStart) {
+        return false;
+      }
+
+      // Today's events: check event time
+      if (!event.time) {
+        return true;
+      }
+
+      const timeMatch = event.time.match(
+        /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i
+      );
+
+      // Keep event if time format cannot be recognized
+      if (!timeMatch) {
+        return true;
+      }
+
+      let hours = Number(timeMatch[1]);
+      const minutes = Number(timeMatch[2]);
+      const period = timeMatch[3]?.toUpperCase();
+
+      // Convert 12-hour time to 24-hour time
+      if (period === "PM" && hours !== 12) {
+        hours += 12;
+      } else if (period === "AM" && hours === 12) {
+        hours = 0;
+      }
+
+      const eventTime = new Date(eventDay);
+      eventTime.setHours(hours, minutes, 0, 0);
+
+      return eventTime > now;
+    });
+
+    // Calculate total events after all filters
+    const totalEvents = upcomingEvents.length;
+
+    // Apply pagination
+    const events = upcomingEvents.slice(skip, skip + pageLimit);
+
+    const totalPages = Math.ceil(totalEvents / pageLimit);
 
     return res.status(200).json({
       status: true,
@@ -230,10 +385,11 @@ const getAllEvents = async (req, res) => {
       pagination: {
         totalEvents,
         currentPage,
-        totalPages: Math.ceil(totalEvents / pageLimit),
+        totalPages,
         limit: pageLimit,
       },
     });
+
   } catch (error) {
     console.error("GET ALL EVENTS ERROR:", error);
 
@@ -244,6 +400,39 @@ const getAllEvents = async (req, res) => {
   }
 };
 
+
+const getEventFilterOptions = async (req, res) => {
+  try {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const filter = {
+      isActive: true,
+      date: { $gte: todayStart },
+    };
+
+    // Get unique categories and locations from MongoDB
+    const [categories, locations] = await Promise.all([
+      Event.distinct("category", filter),
+      Event.distinct("location", filter),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        categories: categories.filter(Boolean).sort(),
+        locations: locations.filter(Boolean).sort(),
+      },
+    });
+  } catch (error) {
+    console.error("Filter options error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch filter options",
+    });
+  }
+};
 
 
 //get one event byid
@@ -470,6 +659,7 @@ const getMyEvents = async (req, res) => {
 module.exports = {
   createEvent,
   getAllEvents,
+  getEventFilterOptions,
   getEventById,
   updateEvent,
   deleteEvent,

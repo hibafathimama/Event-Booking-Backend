@@ -4,6 +4,7 @@ const {
     getAllUsers,
     getOneUser,
     deleteUser,
+    toggleUserStatus,
     getAllEvents,
     getEventByid,
     deleteEvent,
@@ -82,6 +83,20 @@ router.delete(
     ],
     validateRequest,
     deleteUser
+);
+
+// Activate or deactivate user
+router.patch(
+  "/users/:id/toggle-status",
+  authMiddleware,
+  roleMiddleware(["admin"]),
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Invalid user ID")
+  ],
+  validateRequest,
+  toggleUserStatus
 );
 
 // Get all events

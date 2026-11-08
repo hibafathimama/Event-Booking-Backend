@@ -1,4 +1,3 @@
-
 const mongoose = require("mongoose");
 
 const notificationSchema = new mongoose.Schema(
@@ -40,6 +39,13 @@ const notificationSchema = new mongoose.Schema(
           this.type !== "event_update"
         );
       },
+    },
+
+    // Person who sent the notification
+    sender: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
     },
 
     isRead: {
