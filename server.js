@@ -89,6 +89,13 @@ app.use(
   require("./controllers/paymentWebhookController").handleStripeWebhook
 );
 
+// Razorpay webhook must receive the raw request body
+app.use(
+  "/api/razorpay/webhook",
+  express.raw({ type: "application/json" }),
+  require("./controllers/razorpayWebhookController").handleRazorpayWebhook
+);
+
 // Parse JSON for other routes
 app.use(express.json());
 

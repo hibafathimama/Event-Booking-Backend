@@ -3,6 +3,7 @@ const { validationResult } = require("express-validator");
 const Booking = require("../models/booking");
 const Notification = require("../models/notification");
 const Report = require("../models/report");
+const User = require("../models/user");
 
 //create event
 const createEvent = async (req, res) => {
@@ -190,13 +191,23 @@ const getAllEvents = async (req, res) => {
       now.getDate()
     );
 
-    // Show only active upcoming events
-    const filter = {
-      isActive: true,
-      date: {
-        $gte: todayStart,
-      },
-    };
+// Get all active organizers
+const activeOrganizers = await User.distinct("_id", {
+  role: "organizer",
+  isActive: true,
+  verificationStatus: "approved",
+});
+
+// Show only active events created by active organizers
+const filter = {
+  isActive: true,
+  organizer: {
+    $in: activeOrganizers,
+  },
+  date: {
+    $gte: todayStart,
+  },
+};
 
     // Exclude events reported by the logged-in user
     if (req.user && req.user.user_id) {
@@ -365,14 +376,15 @@ const getAllEvents = async (req, res) => {
       },
     });
 
-  } catch (error) {
-    console.error("GET ALL EVENTS ERROR:", error);
+} catch (error) {
+  console.error("GET ALL EVENTS ERROR:", error);
 
-    return res.status(500).json({
-      status: false,
-      message: "Failed to fetch events.",
-    });
-  }
+  return res.status(500).json({
+    status: false,
+    message: "Failed to fetch events.",
+    error: error.message,
+  });
+}
 };
 
 

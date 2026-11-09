@@ -89,6 +89,31 @@ const bookingSchema = new mongoose.Schema(
     unique: true,
     sparse: true,
   },
+  razorpayRefundId: {
+  type: String,
+  default: null,
+},
+
+refundAmount: {
+  type: Number,
+  default: 0,
+},
+
+refundStatus: {
+  type: String,
+  enum: [
+    "not_requested",
+    "pending",
+    "processed",
+    "failed",
+  ],
+  default: "not_requested",
+},
+
+refundRequestedAt: {
+  type: Date,
+  default: null,
+},
   },
   {
     timestamps: true,

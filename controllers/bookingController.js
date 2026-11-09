@@ -4,6 +4,7 @@ const { validationResult } = require("express-validator");
 const Notification = require("../models/notification");
 const QRCode = require("qrcode");
 const crypto = require("crypto");
+const razorpay = require("../config/razorpay");
 
 const createBooking = async (req, res) => {
   try {
@@ -209,10 +210,9 @@ const createBooking = async (req, res) => {
 // GET MY BOOKINGS
 const getMybookings = async (req, res) => {
   try {
-    const bookings = await Booking.find({
-      user: req.user.user_id,
-      status: { $ne: "cancelled" },
-    })
+const bookings = await Booking.find({
+  user: req.user.user_id,
+})
       .populate(
         "event",
         "eventName date time venue location ticketPrice image"
@@ -315,20 +315,14 @@ const getOrganizerBookings = async (req, res) => {
 };
 
 
-// CANCEL BOOKING
+// CANCEL BOOKING WITH RAZORPAY REFUND
+
 const cancelBooking = async (req, res) => {
   try {
-    const errors = validationResult(req);
-
-    if (!errors.isEmpty()) {
-      return res.status(422).json({
-        message: errors.array()[0].msg,
-      });
-    }
-
     const { id } = req.params;
 
-    // Find booking
+    // 1. Find booking belonging to logged-in user
+
     const booking = await Booking.findOne({
       _id: id,
       user: req.user.user_id,
@@ -336,67 +330,311 @@ const cancelBooking = async (req, res) => {
 
     if (!booking) {
       return res.status(404).json({
+        status: false,
         message: "Booking not found",
       });
     }
 
     if (booking.status === "cancelled") {
       return res.status(400).json({
+        status: false,
         message: "Booking is already cancelled",
       });
     }
 
-    // Find event
+    // 2. Prevent cancellation after ticket check-in
+
+    if (booking.checkedIn) {
+      return res.status(400).json({
+        status: false,
+        message: "A used ticket cannot be cancelled",
+      });
+    }
+
+    // 3. Find event
+
     const event = await Event.findById(booking.event);
 
     if (!event) {
       return res.status(404).json({
+        status: false,
         message: "Event not found",
       });
     }
 
-    // Restore available seats
-    await Event.findByIdAndUpdate(
-      booking.event,
+    // 4. Prevent cancellation after event starts
+
+    const eventDateTime = new Date(
+      `${new Date(event.date).toISOString().split("T")[0]}T${event.time}`
+    );
+
+    if (eventDateTime <= new Date()) {
+      return res.status(400).json({
+        status: false,
+        message: "This booking can no longer be cancelled",
+      });
+    }
+
+    // 5. Check payment
+
+    if (
+      booking.paymentStatus !== "paid" ||
+      !booking.razorpayPaymentId
+    ) {
+      return res.status(400).json({
+        status: false,
+        message: "No successful Razorpay payment found",
+      });
+    }
+
+    // 6. Check existing refund request
+
+    if (
+      booking.refundStatus !== "not_requested" &&
+      booking.refundStatus !== "failed"
+    ) {
+      return res.status(400).json({
+        status: false,
+        message: "A refund request is already being processed",
+      });
+    }
+
+    // 7. Verify actual Razorpay payment
+
+    const payment = await razorpay.payments.fetch(
+      booking.razorpayPaymentId
+    );
+
+    if (payment.status !== "captured") {
+      return res.status(400).json({
+        status: false,
+        message: "Payment is not captured. Refund cannot be initiated.",
+      });
+    }
+
+    const expectedAmount = Math.round(
+      booking.totalPrice * 100
+    );
+
+    if (payment.amount !== expectedAmount) {
+      return res.status(400).json({
+        status: false,
+        message: "Payment amount does not match booking amount",
+      });
+    }
+
+    // 8. Lock booking to prevent duplicate refund requests
+
+    const lockedBooking = await Booking.findOneAndUpdate(
       {
-        $inc: { availableSeats: booking.quantity },
+        _id: booking._id,
+        user: req.user.user_id,
+        status: { $ne: "cancelled" },
+        refundStatus: {
+          $in: ["not_requested", "failed"],
+        },
       },
       {
-        runValidators: true,
+        $set: {
+          refundStatus: "initiating",
+          refundRequestedAt: new Date(),
+        },
+      },
+      {
+        new: true,
       }
     );
 
-    // Update booking status
+    if (!lockedBooking) {
+      return res.status(409).json({
+        status: false,
+        message: "Booking cancellation or refund is already in progress",
+      });
+    }
+
+    // 9. Request Razorpay refund
+
+    let refund;
+
+    try {
+      refund = await razorpay.payments.refund(
+        booking.razorpayPaymentId,
+        {
+          amount: expectedAmount,
+          notes: {
+            bookingId: booking.bookingId,
+            reason: "User cancelled booking",
+          },
+        }
+      );
+    } catch (refundError) {
+      console.error(
+        "RAZORPAY REFUND ERROR:",
+        refundError
+      );
+
+      // Keep status as initiating if the result is uncertain.
+      // Check the Razorpay dashboard before attempting another refund.
+
+      return res.status(500).json({
+        status: false,
+        message:
+          "Refund could not be confirmed. Please contact support before retrying.",
+      });
+    }
+
+    // 10. Validate refund response
+
+    if (!refund || !refund.id) {
+      return res.status(500).json({
+        status: false,
+        message: "Razorpay did not return a valid refund ID",
+      });
+    }
+
+    // 11. Save refund information and cancel booking
+
     booking.status = "cancelled";
+    booking.razorpayRefundId = refund.id;
+    booking.refundAmount = expectedAmount / 100;
+
+    booking.refundStatus =
+      refund.status === "processed"
+        ? "processed"
+        : "pending";
+
+    if (refund.status === "processed") {
+      booking.paymentStatus = "refunded";
+    }
+
+    booking.refundRequestedAt = new Date();
 
     await booking.save();
 
-    //  Create booking cancellation notification
-    // Automatically generated by the system
+    // 12. Restore event seats
+
+    if (event.seatingType === "reserved") {
+      const selectedSeats = booking.selectedSeats || [];
+
+      if (
+        selectedSeats.length !== booking.quantity ||
+        new Set(selectedSeats).size !== booking.quantity
+      ) {
+        throw new Error(
+          "Invalid selected seats. Manual seat restoration is required."
+        );
+      }
+
+      const result = await Event.updateOne(
+        {
+          _id: event._id,
+
+          $expr: {
+            $eq: [
+              {
+                $size: {
+                  $filter: {
+                    input: "$seats",
+                    as: "seat",
+                    cond: {
+                      $and: [
+                        {
+                          $in: [
+                            "$$seat.seatNumber",
+                            selectedSeats,
+                          ],
+                        },
+                        {
+                          $eq: [
+                            "$$seat.status",
+                            "booked",
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+              booking.quantity,
+            ],
+          },
+        },
+        {
+          $set: {
+            "seats.$[seat].status": "available",
+            "seats.$[seat].reservationOrderId": null,
+            "seats.$[seat].reservedUntil": null,
+          },
+          $inc: {
+            availableSeats: booking.quantity,
+          },
+        },
+        {
+          arrayFilters: [
+            {
+              "seat.seatNumber": {
+                $in: selectedSeats,
+              },
+              "seat.status": "booked",
+            },
+          ],
+        }
+      );
+
+      if (result.modifiedCount !== 1) {
+        throw new Error(
+          "Reserved seats could not be restored. Manual correction is required."
+        );
+      }
+    } else if (event.seatingType === "general") {
+      await Event.findByIdAndUpdate(event._id, {
+        $inc: {
+          availableSeats: booking.quantity,
+        },
+      });
+    }
+
+    // 13. Send cancellation notification
+
     try {
       await Notification.create({
         user: req.user.user_id,
         sender: null,
         type: "booking_cancellation",
-        message: `Your booking for ${event.eventName} has been cancelled successfully. Booking ID: ${booking.bookingId}`,
+        message:
+          `Your booking ${booking.bookingId} has been cancelled. ` +
+          `Refund status: ${booking.refundStatus}.`,
       });
     } catch (notificationError) {
       console.error(
-        "BOOKING CANCELLATION NOTIFICATION ERROR:",
+        "CANCELLATION NOTIFICATION ERROR:",
         notificationError
       );
     }
 
+    // 14. Return response
+
     return res.status(200).json({
       status: true,
-      message: "Booking cancelled successfully",
-      data: booking,
+      message: "Booking cancelled and refund initiated successfully",
+
+      data: {
+        bookingId: booking.bookingId,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
+        refundId: booking.razorpayRefundId,
+        refundAmount: booking.refundAmount,
+        refundStatus: booking.refundStatus,
+      },
     });
+
   } catch (error) {
     console.error("CANCEL BOOKING ERROR:", error);
 
     return res.status(500).json({
-      message: error.message || "Failed to cancel booking",
+      status: false,
+      message:
+        error.message || "Failed to cancel booking",
     });
   }
 };
