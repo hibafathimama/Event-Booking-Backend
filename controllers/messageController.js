@@ -1,5 +1,6 @@
 const Message = require("../models/message");
 const Event = require("../models/event");
+const User = require("../models/user");
 const mongoose = require("mongoose");
 
 // Send a message to an event organizer
@@ -521,13 +522,501 @@ const getUserUnreadCount = async (req, res) => {
   }
 };
 
+// ==========================================
+// ADMIN ↔ ORGANIZER MESSAGING
+// ==========================================
+
+
+// Send message between Admin and Organizer
+const sendAdminOrganizerMessage = async (req, res) => {
+  try {
+    const senderId = req.user.user_id;
+    const senderRole = req.user.role;
+
+    const { receiverId, message } = req.body;
+
+    if (!["admin", "organizer"].includes(senderRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins and organizers can send these messages.",
+      });
+    }
+
+    if (!receiverId || !mongoose.isValidObjectId(receiverId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid receiver ID is required.",
+      });
+    }
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Message cannot be empty.",
+      });
+    }
+
+    if (message.trim().length > 2000) {
+      return res.status(400).json({
+        success: false,
+        message: "Message cannot exceed 2000 characters.",
+      });
+    }
+
+    // Admin can message organizers.
+    // Organizers can message admins.
+    const expectedRole =
+      senderRole === "admin" ? "organizer" : "admin";
+
+    const receiver = await User.findOne({
+      _id: receiverId,
+      role: expectedRole,
+    });
+
+    if (!receiver || receiver.isActive === false) {
+      return res.status(404).json({
+        success: false,
+        message: "Receiver not found or inactive.",
+      });
+    }
+
+    if (!receiver) {
+      return res.status(404).json({
+        success: false,
+        message: "Receiver not found or inactive.",
+      });
+    }
+
+    const newMessage = await Message.create({
+      sender: senderId,
+      receiver: receiverId,
+      event: null,
+      message: message.trim(),
+    });
+
+    await newMessage.populate([
+      {
+        path: "sender",
+        select: "firstName lastName email role",
+      },
+      {
+        path: "receiver",
+        select: "firstName lastName email role",
+      },
+    ]);
+
+    return res.status(201).json({
+      success: true,
+      message: "Message sent successfully.",
+      data: newMessage,
+    });
+  } catch (error) {
+    console.error("Admin organizer send message error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send message.",
+    });
+  }
+};
+
+
+// Get all Admin conversations
+const getAdminConversations = async (req, res) => {
+  try {
+    const adminId = req.user.user_id;
+
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can access these conversations.",
+      });
+    }
+
+    const messages = await Message.find({
+      event: null,
+      $or: [
+        { sender: adminId },
+        { receiver: adminId },
+      ],
+    })
+      .populate("sender", "firstName lastName email role image")
+      .populate("receiver", "firstName lastName email role image")
+      .sort({ createdAt: -1 });
+
+    const conversations = new Map();
+
+    messages.forEach((item) => {
+      if (!item.sender || !item.receiver) return;
+
+      const organizer =
+        String(item.sender._id) === String(adminId)
+          ? item.receiver
+          : item.sender;
+
+      if (organizer.role !== "organizer") return;
+
+      const organizerId = String(organizer._id);
+
+      if (!conversations.has(organizerId)) {
+        conversations.set(organizerId, {
+          organizer,
+          lastMessage: item,
+          unreadCount: 0,
+        });
+      }
+
+      if (
+        String(item.receiver._id) === String(adminId) &&
+        !item.isRead
+      ) {
+        conversations.get(organizerId).unreadCount += 1;
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Admin conversations fetched successfully.",
+      data: Array.from(conversations.values()),
+    });
+  } catch (error) {
+    console.error("Admin conversations error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch admin conversations.",
+    });
+  }
+};
+
+
+// Get all Admin conversations for an Organizer
+const getOrganizerAdminConversations = async (req, res) => {
+  try {
+    const organizerId = req.user.user_id;
+
+    if (req.user.role !== "organizer") {
+      return res.status(403).json({
+        success: false,
+        message: "Only organizers can access these conversations.",
+      });
+    }
+
+    const messages = await Message.find({
+      event: null,
+      $or: [
+        { sender: organizerId },
+        { receiver: organizerId },
+      ],
+    })
+      .populate("sender", "firstName lastName email role image")
+      .populate("receiver", "firstName lastName email role image")
+      .sort({ createdAt: -1 });
+
+    const conversations = new Map();
+
+    messages.forEach((item) => {
+      if (!item.sender || !item.receiver) return;
+
+      const admin =
+        String(item.sender._id) === String(organizerId)
+          ? item.receiver
+          : item.sender;
+
+      if (admin.role !== "admin") return;
+
+      const adminId = String(admin._id);
+
+      if (!conversations.has(adminId)) {
+        conversations.set(adminId, {
+          admin,
+          lastMessage: item,
+          unreadCount: 0,
+        });
+      }
+
+      if (
+        String(item.receiver._id) === String(organizerId) &&
+        !item.isRead
+      ) {
+        conversations.get(adminId).unreadCount += 1;
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Organizer admin conversations fetched successfully.",
+      data: Array.from(conversations.values()),
+    });
+  } catch (error) {
+    console.error("Organizer admin conversations error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch admin conversations.",
+    });
+  }
+};
+
+
+// Get messages between Admin and Organizer
+const getAdminOrganizerMessages = async (req, res) => {
+  try {
+    const currentUserId = req.user.user_id;
+    const currentRole = req.user.role;
+    const { userId } = req.params;
+
+    if (!["admin", "organizer"].includes(currentRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized access.",
+      });
+    }
+
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID.",
+      });
+    }
+
+    const expectedRole =
+      currentRole === "admin" ? "organizer" : "admin";
+
+    const otherUser = await User.findOne({
+      _id: userId,
+      role: expectedRole,
+    });
+
+    if (!otherUser) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversation user not found.",
+      });
+    }
+
+    const messages = await Message.find({
+      event: null,
+      $or: [
+        {
+          sender: currentUserId,
+          receiver: userId,
+        },
+        {
+          sender: userId,
+          receiver: currentUserId,
+        },
+      ],
+    })
+      .populate("sender", "firstName lastName email role image")
+      .populate("receiver", "firstName lastName email role image")
+      .sort({ createdAt: 1 });
+
+    return res.status(200).json({
+      success: true,
+      message: "Messages fetched successfully.",
+      data: messages,
+    });
+  } catch (error) {
+    console.error("Admin organizer messages error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch messages.",
+    });
+  }
+};
+
+
+// Mark Admin ↔ Organizer messages as read
+const markAdminMessagesAsRead = async (req, res) => {
+  try {
+    const currentUserId = req.user.user_id;
+    const currentRole = req.user.role;
+    const { userId } = req.params;
+
+    if (!["admin", "organizer"].includes(currentRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized access.",
+      });
+    }
+
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID.",
+      });
+    }
+
+    const expectedRole =
+      currentRole === "admin" ? "organizer" : "admin";
+
+    const otherUser = await User.findOne({
+      _id: userId,
+      role: expectedRole,
+    });
+
+    if (!otherUser) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversation user not found.",
+      });
+    }
+
+    const result = await Message.updateMany(
+      {
+        event: null,
+        sender: userId,
+        receiver: currentUserId,
+        isRead: false,
+      },
+      {
+        $set: { isRead: true },
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Messages marked as read.",
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    console.error("Admin organizer mark read error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to mark messages as read.",
+    });
+  }
+};
+
+
+// Get Admin unread message count
+const getAdminUnreadCount = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can access this information.",
+      });
+    }
+
+    const unreadCount = await Message.countDocuments({
+      receiver: req.user.user_id,
+      event: null,
+      isRead: false,
+    });
+
+    return res.status(200).json({
+      success: true,
+      unreadCount,
+    });
+  } catch (error) {
+    console.error("Admin unread count error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch unread count.",
+    });
+  }
+};
+
+
+// Get Organizer unread messages from Admin
+const getOrganizerAdminUnreadCount = async (req, res) => {
+  try {
+    if (req.user.role !== "organizer") {
+      return res.status(403).json({
+        success: false,
+        message: "Only organizers can access this information.",
+      });
+    }
+
+    const adminIds = await User.find({
+      role: "admin",
+    }).distinct("_id");
+
+    const unreadCount = await Message.countDocuments({
+      sender: { $in: adminIds },
+      receiver: req.user.user_id,
+      event: null,
+      isRead: false,
+    });
+
+    return res.status(200).json({
+      success: true,
+      unreadCount,
+    });
+  } catch (error) {
+    console.error("Organizer admin unread count error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch unread count.",
+    });
+  }
+};
+
+// ==========================================
+// ADMIN: GET ALL REGISTERED ORGANIZERS
+// ==========================================
+
+const getAllOrganizers = async (req, res) => {
+  try {
+    // Only admin can access this API
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Admin only.",
+      });
+    }
+
+    // Fetch all active organizers
+    const organizers = await User.find({
+      role: "organizer",
+      isActive: { $ne: false },
+    })
+      .select(
+        "firstName lastName email image organizerDetails.organizationName"
+      )
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      message: "Organizers fetched successfully.",
+      data: organizers,
+    });
+  } catch (error) {
+    console.error("Get all organizers error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch organizers.",
+      error: error.message,
+    });
+  }
+};
 
 module.exports = {
-sendMessage,
-getEventMessages,
-getOrganizerConversations,
-getUserConversations,
-markMessagesAsRead,
-getOrganizerUnreadCount,
-getUserUnreadCount,
+  sendMessage,
+  getEventMessages,
+  getOrganizerConversations,
+  getUserConversations,
+  markMessagesAsRead,
+  getOrganizerUnreadCount,
+  getUserUnreadCount,
+
+  // Admin ↔ Organizer messaging functions
+  sendAdminOrganizerMessage,
+  getAdminConversations,
+  getOrganizerAdminConversations,
+  getAdminOrganizerMessages,
+  markAdminMessagesAsRead,
+  getAdminUnreadCount,
+  getOrganizerAdminUnreadCount,
+
+  // Admin: Get all organizers
+  getAllOrganizers,
+
 };
