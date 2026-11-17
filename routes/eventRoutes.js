@@ -26,7 +26,7 @@ router.post(
 );
 
 // Get all events (public)
-router.get("/getevent",authMiddleware,getAllEvents);
+router.get("/getevent", getAllEvents);
 
 router.get("/filter-options", getEventFilterOptions);
 
